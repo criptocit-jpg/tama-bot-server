@@ -5,7 +5,7 @@ const url = require('url');
 
 const BOT_TOKEN = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg';
 const ADMIN_GROUP_ID = '-5110681605'; 
-const SUPER_ADMIN_ID = '7883085758'; // Твой личный ID для команд везде
+const SUPER_ADMIN_ID = '7883085758'; 
 const DB_PATH = './database.json';
 
 const bot = new Telegraf(BOT_TOKEN);
@@ -27,7 +27,6 @@ function getUpdatedUser(db, uid, name = "Рыбак") {
     }
     const u = db[uid];
     if (u.banned) return u;
-
     const maxE = 15 + (u.level * 3);
     const now = Date.now();
     const gain = Math.floor((now - u.lastRegen) / 900000);
@@ -35,48 +34,7 @@ function getUpdatedUser(db, uid, name = "Рыбак") {
     return u;
 }
 
-// --- КОМАНДЫ БОГА (/admin) ---
-bot.command('admin', (ctx) => {
-    const uid = String(ctx.from.id);
-    const chatid = String(ctx.chat.id);
-    
-    if (uid !== SUPER_ADMIN_ID && chatid !== ADMIN_GROUP_ID) return;
-
-    const args = ctx.message.text.split(' ');
-    const cmd = args[1];
-    let db = readDB();
-
-    if (!cmd || cmd === 'help') {
-        return ctx.reply("🛠 ПАНЕЛЬ БОГА:\n/admin stats - Статистика\n/admin give [id] [sum] - Дать монет\n/admin ban [id] - Бан\n/admin unban [id] - Разбан");
-    }
-
-    if (cmd === 'stats') {
-        const users = Object.keys(db).length;
-        const totalCoins = Object.values(db).reduce((a, b) => a + (b.balance || 0), 0);
-        return ctx.reply(`📊 СТАТИСТИКА:\nИгроков: ${users}\nМонет в обороте: ${totalCoins.toFixed(2)} TC`);
-    }
-
-    if (cmd === 'give' && args[2] && args[3]) {
-        const targetId = args[2];
-        const amount = parseFloat(args[3]);
-        if (db[targetId]) {
-            db[targetId].balance += amount;
-            writeDB(db);
-            ctx.reply(`✅ Выдано ${amount} TC игроку ${targetId}`);
-            bot.telegram.sendMessage(targetId, `🎁 Админ начислил вам ${amount} TC!`).catch(()=>{});
-        } else ctx.reply("❌ Юзер не найден");
-    }
-
-    if (cmd === 'ban' && args[2]) {
-        if (db[args[2]]) {
-            db[args[2]].banned = true;
-            writeDB(db);
-            ctx.reply("🚫 Игрок заблокирован");
-        }
-    }
-});
-
-// Платежи Stars
+// ПЛАТЕЖИ STARS
 bot.on('pre_checkout_query', (ctx) => ctx.answerPreCheckoutQuery(true));
 bot.on('successful_payment', (ctx) => {
     let db = readDB();
@@ -86,7 +44,32 @@ bot.on('successful_payment', (ctx) => {
     if (payload === 'gold_bait') u.baitBoost = 1.5;
     if (payload === 'energy_pack') u.energy += 30;
     writeDB(db);
-    ctx.reply('✅ Предмет активирован!');
+    ctx.reply('✅ Покупка прошла успешно! Улучшение активировано.');
+});
+
+// АДМИН КОМАНДЫ
+bot.command('admin', (ctx) => {
+    const uid = String(ctx.from.id);
+    if (uid !== SUPER_ADMIN_ID && String(ctx.chat.id) !== ADMIN_GROUP_ID) return;
+    const args = ctx.message.text.split(' ');
+    const cmd = args[1];
+    let db = readDB();
+    if (cmd === 'stats') {
+        const uCount = Object.keys(db).length;
+        const total = Object.values(db).reduce((s, x) => s + (x.balance || 0), 0);
+        ctx.reply(`📊 СТАТИСТИКА:\nИгроков: ${uCount}\nМонет: ${total.toFixed(2)} TC`);
+    }
+    if (cmd === 'give' && args[2] && args[3]) {
+        if (db[args[2]]) {
+            db[args[2]].balance += parseFloat(args[3]);
+            writeDB(db);
+            ctx.reply("✅ Баланс пополнен");
+            bot.telegram.sendMessage(args[2], `🎁 Бонус от админа: ${args[3]} TC!`).catch(()=>{});
+        }
+    }
+    if (cmd === 'ban' && args[2]) {
+        if (db[args[2]]) { db[args[2]].banned = true; writeDB(db); ctx.reply("🚫 Бан выдан"); }
+    }
 });
 
 // API СЕРВЕР
@@ -106,11 +89,7 @@ const server = http.createServer((req, res) => {
             const data = JSON.parse(body);
             const uid = String(data.userId);
             let u = getUpdatedUser(db, uid, data.userName);
-
-            if (u.banned) {
-                res.end(JSON.stringify({ banned: true, msg: "ВЫ ЗАБАНЕНЫ" }));
-                return;
-            }
+            if (u.banned) return res.end(JSON.stringify({ banned: true }));
 
             let msg = "";
             if (data.action === 'catch_fish') {
@@ -120,32 +99,40 @@ const server = http.createServer((req, res) => {
                     u.energy -= 1; u.rod_durability -= (u.titanLine ? 1 : 2);
                     let w = parseFloat((Math.random() * 1.5 * (1 + u.level * 0.1) * (u.baitBoost || 1)).toFixed(2));
                     u.fish = parseFloat((u.fish + w).toFixed(2)); u.xp += 25; msg = `Поймал: ${w}кг`;
-                    if (u.xp >= (u.level * 400)) { u.level++; u.xp = 0; msg = "🎊 НОВЫЙ РАНГ!"; }
+                    if (u.xp >= (u.level * 400)) { u.level++; u.xp = 0; msg = "🎊 РАНГ АП!"; }
                 }
             }
-            
+
             if (data.action === 'sell_fish') {
                 const gain = parseFloat((u.fish * 0.5).toFixed(2));
                 u.balance = parseFloat((u.balance + gain).toFixed(2)); u.fish = 0; msg = `Продано на ${gain} TC`;
             }
 
             if (data.action === 'withdraw') {
-                // ПРИВЯЗКА КОШЕЛЬКА
-                if (u.wallet && u.wallet !== data.wallet) {
-                    msg = "❌ Кошелек привязан к другому адресу!";
-                } else if (u.balance >= data.amount && data.amount >= 30000) {
-                    u.wallet = data.wallet; // Закрепляем кошелек
-                    u.balance -= data.amount;
-                    bot.telegram.sendMessage(ADMIN_GROUP_ID, `💰 ЗАЯВКА: ${uid}\nИмя: ${u.name}\nКошелек: ${data.wallet}\nСумма: ${data.amount} TC`, 
+                if (u.wallet && u.wallet !== data.wallet) msg = "❌ Кошелек уже привязан!";
+                else if (u.balance >= data.amount && data.amount >= 30000) {
+                    u.wallet = data.wallet; u.balance -= data.amount;
+                    bot.telegram.sendMessage(ADMIN_GROUP_ID, `💰 ВЫВОД: ${uid}\nИмя: ${u.name}\nКошелек: ${data.wallet}\nСумма: ${data.amount} TC`, 
                     Markup.inlineKeyboard([[Markup.button.callback('✅ ОПЛАЧЕНО', `pay_${uid}_${data.amount}`)]]));
                     msg = "📩 Заявка отправлена!";
                 } else msg = "❌ Ошибка!";
             }
 
             if (data.action === 'buy_stars') {
-                const items = {'titan_line':50, 'gold_bait':100, 'energy_pack':30};
-                bot.telegram.sendInvoice(uid, 'Предмет', 'Магазин', data.id, "", "XTR", [{ label: 'Купить', amount: items[data.id] }]);
-                msg = "💳 Счет отправлен!";
+                const shop = {
+                    'titan_line': { t: 'Титановая леска', d: 'Прочность -1 вместо -2', p: 50 },
+                    'gold_bait': { t: 'Золотая каша', d: '+50% к весу рыбы', p: 100 },
+                    'energy_pack': { t: 'Энергетик', d: '+30 энергии мгновенно', p: 30 }
+                };
+                const item = shop[data.id];
+                if (item) {
+                    bot.telegram.sendInvoice(uid, {
+                        title: item.t, description: item.d, payload: data.id,
+                        provider_token: "", currency: "XTR",
+                        prices: [{ label: item.t, amount: item.p }]
+                    }).catch(e => console.error(e));
+                    msg = "💳 Счет отправлен в чат!";
+                }
             }
 
             writeDB(db);
