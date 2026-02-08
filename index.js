@@ -10,22 +10,31 @@ const DB_PATH = './database.json';
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// Чтение и запись БД
+// База данных с защитой от ошибок
 function readDB() {
     try {
-        if (!fs.existsSync(DB_PATH)) return {};
-        return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
-    } catch (e) { return {}; }
+        if (!fs.existsSync(DB_PATH)) fs.writeFileSync(DB_PATH, JSON.stringify({}));
+        const data = fs.readFileSync(DB_PATH, 'utf8');
+        return JSON.parse(data || '{}');
+    } catch (e) { 
+        console.error("Ошибка чтения БД:", e);
+        return {}; 
+    }
 }
+
 function writeDB(db) {
-    fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
+    try {
+        fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
+    } catch (e) {
+        console.error("Ошибка записи БД:", e);
+    }
 }
 
 function getUpdatedUser(db, uid, name = "Рыбак") {
     if (!db[uid]) {
         db[uid] = { 
             balance: 0, fish: 0, rod_durability: 100, level: 1, xp: 0, 
-            energy: 15, lastRegen: Date.now(), name: name,
+            energy: 15, lastRegen: Date.now(), name: name || "Рыбак",
             titanLine: false, baitBoost: 1, wallet: null, banned: false, boxes: 0 
         };
     }
@@ -41,27 +50,31 @@ function getUpdatedUser(db, uid, name = "Рыбак") {
     return u;
 }
 
-// Обработка /start
-bot.start((ctx) => {
-    const uid = String(ctx.from.id);
-    const refId = ctx.payload; // ID пригласившего
-    let db = readDB();
-    const isNew = !db[uid];
-    
-    let u = getUpdatedUser(db, uid, ctx.from.first_name);
+// ИСПРАВЛЕННЫЙ START
+bot.start(async (ctx) => {
+    try {
+        const uid = String(ctx.from.id);
+        const refId = ctx.startPayload ? String(ctx.startPayload) : null; 
+        let db = readDB();
+        const isNew = !db[uid];
+        
+        getUpdatedUser(db, uid, ctx.from.first_name);
 
-    if (isNew && refId && refId !== uid && db[refId]) {
-        db[refId].boxes = (db[refId].boxes || 0) + 1;
-        bot.telegram.sendMessage(refId, `📦 Вам начислен "Забытый ящик" за приглашение друга!`).catch(() => {});
+        if (isNew && refId && refId !== uid && db[refId]) {
+            db[refId].boxes = (db[refId].boxes || 0) + 1;
+            bot.telegram.sendMessage(refId, `📦 Вам начислен "Забытый ящик" за приглашение друга!`).catch(e => console.log("Не смог отправить уведомление рефу"));
+        }
+        
+        writeDB(db);
+        await ctx.reply(`🎣 Привет, ${ctx.from.first_name}! Жми кнопку ниже, чтобы начать.`, 
+            Markup.keyboard([[Markup.button.webApp('ИГРАТЬ', 'https://criptocit-jpg.github.io/tama-fishing/')]]).resize()
+        );
+    } catch (err) {
+        console.error("Критическая ошибка в /start:", err);
     }
-    
-    writeDB(db);
-    ctx.reply(`🎣 Привет, ${ctx.from.first_name}! Готов к большой рыбалке?`, 
-        Markup.keyboard([[Markup.button.webApp('ИГРАТЬ', 'https://criptocit-jpg.github.io/tama-fishing/')]]).resize()
-    );
 });
 
-// Админ-команды
+// АДМИНКА
 bot.command('admin', (ctx) => {
     const uid = String(ctx.from.id);
     if (uid !== SUPER_ADMIN_ID && String(ctx.chat.id) !== ADMIN_GROUP_ID) return;
@@ -72,8 +85,10 @@ bot.command('admin', (ctx) => {
 
     if (cmd === 'list') {
         let list = "👤 **ИГРОКИ:**\n";
-        Object.entries(db).slice(-10).forEach(([id, p]) => {
-            list += `🔹 ${p.name} | ID: \`${id}\` | 💰 ${Math.floor(p.balance)}\n`;
+        const keys = Object.keys(db).slice(-10);
+        if (keys.length === 0) list += "Игроков пока нет.";
+        keys.forEach(id => {
+            list += `🔹 ${db[id].name} | ID: \`${id}\` | 💰 ${Math.floor(db[id].balance)}\n`;
         });
         ctx.reply(list, { parse_mode: 'Markdown' });
     }
@@ -82,36 +97,12 @@ bot.command('admin', (ctx) => {
         if (db[args[2]]) {
             db[args[2]].balance += parseFloat(args[3]);
             writeDB(db);
-            ctx.reply("✅ Выдано!");
-        }
+            ctx.reply(`✅ Выдано ${args[3]} монет игроку ${args[2]}`);
+        } else ctx.reply("❌ ID не найден");
     }
 });
 
-// Исправленный метод отправки счетов Stars
-async function sendStarsInvoice(uid, itemId) {
-    const shop = {
-        'titan_line': { t: 'Титановая леска', d: 'Прочность -1 вместо -2', p: 50 },
-        'gold_bait': { t: 'Золотая каша', d: '+50% к весу рыбы', p: 100 },
-        'energy_pack': { t: 'Энергетик', d: '+30 энергии мгновенно', p: 30 }
-    };
-    const item = shop[itemId];
-    if (!item) return;
-
-    try {
-        await bot.telegram.sendInvoice(uid, {
-            title: item.t,
-            description: item.d,
-            payload: itemId,
-            provider_token: "", 
-            currency: "XTR",
-            prices: [{ label: item.t, amount: item.p }]
-        });
-    } catch (e) {
-        console.error("Ошибка выставления счета:", e);
-    }
-}
-
-// HTTP Сервер
+// СЕРВЕР С ОБРАБОТКОЙ ОШИБОК
 const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -152,24 +143,39 @@ const server = http.createServer((req, res) => {
                 }
 
                 if (data.action === 'buy_stars') {
-                    await sendStarsInvoice(uid, data.id);
-                    msg = "💳 Счет отправлен!";
+                    const shop = {
+                        'titan_line': { t: 'Титановая леска', d: 'Прочность -1 вместо -2', p: 50 },
+                        'gold_bait': { t: 'Золотая каша', d: '+50% к весу рыбы', p: 100 },
+                        'energy_pack': { t: 'Энергетик', d: '+30 энергии мгновенно', p: 30 }
+                    };
+                    const item = shop[data.id];
+                    if (item) {
+                        await bot.telegram.sendInvoice(uid, {
+                            title: item.t, description: item.d, payload: data.id,
+                            provider_token: "", currency: "XTR",
+                            prices: [{ label: item.t, amount: item.p }]
+                        }).catch(e => console.error("Invoice fail:", e));
+                        msg = "💳 Счет отправлен!";
+                    }
                 }
 
                 writeDB(db);
                 res.end(JSON.stringify({ ...u, msg }));
-            } catch (e) { res.end(JSON.stringify({ error: true })); }
+            } catch (e) { 
+                console.error("API Error:", e);
+                res.end(JSON.stringify({ error: true })); 
+            }
         });
         return;
     }
 
     if (parsedUrl.pathname === '/api/action') {
         const u = getUpdatedUser(db, String(parsedUrl.query.userId));
-        res.end(JSON.stringify(u));
+        const top = Object.values(db).filter(i=>!i.banned).sort((a,b)=>b.balance-a.balance).slice(0,10).map(i=>({n:i.name, b:i.balance}));
+        res.end(JSON.stringify({ ...u, top }));
     }
 });
 
-// Обработка платежей
 bot.on('pre_checkout_query', (ctx) => ctx.answerPreCheckoutQuery(true));
 bot.on('successful_payment', (ctx) => {
     let db = readDB();
@@ -179,17 +185,19 @@ bot.on('successful_payment', (ctx) => {
     if (p === 'gold_bait') u.baitBoost = 1.5;
     if (p === 'energy_pack') u.energy += 30;
     writeDB(db);
-    ctx.reply('✅ Покупка активирована!');
+    ctx.reply('✅ Покупка прошла успешно!');
 });
 
-// Запуск
+bot.action(/pay_(.+)_(.+)/, (ctx) => {
+    const [_, uid, amount] = ctx.match;
+    bot.telegram.sendMessage(uid, `🎉 Выплата подтверждена!`).catch(e => {});
+    ctx.editMessageText(ctx.update.callback_query.message.text + "\n\n✅ ОПЛАЧЕНО");
+});
+
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Сервер запущен на порту ${PORT}`);
-});
+server.listen(PORT, '0.0.0.0', () => console.log(`Server on port ${PORT}`));
 
-bot.launch().then(() => console.log('Бот запущен!'));
+bot.launch().catch(e => console.error("Bot launch fail:", e));
 
-// Остановка
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
