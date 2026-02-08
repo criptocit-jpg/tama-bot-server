@@ -8,7 +8,7 @@ const ADMIN_ID = '7883085758';
 const DB_PATH = './database.json';
 
 const ECO = { 
-    FISH_PRICE: 0.1, 
+    FISH_PRICE: 0.5, 
     REPAIR_COST: 10, 
     BAIT_COST: 25,
     REGEN_TIME: 900000,
@@ -141,3 +141,4 @@ bot.start(ctx => {
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, '0.0.0.0', () => console.log(`🚀 Сервер на порту ${PORT}`));
 bot.launch();
+
