@@ -10,7 +10,6 @@ const DB_PATH = './database.json';
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// База данных
 function readDB() {
     try {
         if (!fs.existsSync(DB_PATH)) fs.writeFileSync(DB_PATH, JSON.stringify({}));
@@ -45,13 +44,12 @@ bot.start(async (ctx) => {
     getUpdatedUser(db, uid, ctx.from.first_name);
     if (isNew && refId && refId !== uid && db[refId]) {
         db[refId].boxes = (db[refId].boxes || 0) + 1;
-        bot.telegram.sendMessage(refId, `📦 Новый ящик за друга!`).catch(() => {});
+        bot.telegram.sendMessage(refId, `📦 Вам начислен ящик за друга!`).catch(() => {});
     }
     writeDB(db);
-    ctx.reply(`🎣 Игра готова!`, Markup.keyboard([[Markup.button.webApp('ИГРАТЬ', 'https://criptocit-jpg.github.io/tama-fishing/')]]).resize());
+    ctx.reply(`🎣 Клев начался!`, Markup.keyboard([[Markup.button.webApp('ИГРАТЬ', 'https://criptocit-jpg.github.io/tama-fishing/')]]).resize());
 });
 
-// API СЕРВЕР
 const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -59,61 +57,58 @@ const server = http.createServer((req, res) => {
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
     const parsedUrl = url.parse(req.url, true);
+    let db = readDB();
+
+    // ЕДИНЫЙ ПУТЬ ДЛЯ ВСЕХ ДЕЙСТВИЙ
     if (parsedUrl.pathname === '/api/action') {
-        let db = readDB();
         if (req.method === 'POST') {
             let body = '';
             req.on('data', c => body += c);
             req.on('end', () => {
-                const data = JSON.parse(body);
-                let u = getUpdatedUser(db, String(data.userId), data.userName);
-                let msg = "";
-                if (data.action === 'catch_fish' && u.energy > 0) {
-                    u.energy--; u.rod_durability -= 2;
-                    let w = parseFloat((Math.random() * 1.5).toFixed(2));
-                    u.fish += w; u.xp += 25; msg = `Поймал ${w}кг`;
-                }
-                if (data.action === 'open_box' && u.boxes > 0) {
-                    u.boxes--; u.balance += 15000; msg = "🎁 Найдено 15,000 TC!";
-                }
-                if (data.action === 'sell_fish') {
-                    let g = parseFloat((u.fish * 0.5).toFixed(2));
-                    u.balance += g; u.fish = 0; msg = `Продано на ${g} TC`;
-                }
-                writeDB(db);
-                res.end(JSON.stringify({ ...u, msg }));
+                try {
+                    const data = JSON.parse(body);
+                    const uid = String(data.userId);
+                    let u = getUpdatedUser(db, uid, data.userName);
+                    let msg = "";
+
+                    if (data.action === 'catch_fish' && u.energy > 0) {
+                        u.energy--; u.rod_durability -= (u.titanLine ? 1 : 2);
+                        let w = parseFloat((Math.random() * 1.5 * (u.baitBoost || 1)).toFixed(2));
+                        u.fish = parseFloat((u.fish + w).toFixed(2)); u.xp += 25;
+                        msg = `Улов: ${w}кг`;
+                        if (u.xp >= (u.level * 400)) { u.level++; u.xp = 0; msg = "🎊 УРОВЕНЬ ПОВЫШЕН!"; }
+                    } else if (data.action === 'sell_fish') {
+                        let gain = parseFloat((u.fish * 0.5).toFixed(2));
+                        u.balance = parseFloat((u.balance + gain).toFixed(2)); u.fish = 0;
+                        msg = `Продано на ${gain} TC`;
+                    } else if (data.action === 'open_box' && u.boxes > 0) {
+                        u.boxes--;
+                        const win = [5000, 10000, 20000, 50000][Math.floor(Math.random()*4)];
+                        u.balance += win; msg = `🎁 Выпало ${win} TC!`;
+                    }
+
+                    writeDB(db);
+                    res.end(JSON.stringify({ ...u, msg }));
+                } catch(e) { res.end(JSON.stringify({error: true})); }
             });
         } else {
-            const u = getUpdatedUser(db, String(parsedUrl.query.userId));
-            const top = Object.values(db).slice(0,10).map(i=>({n:i.name, b:i.balance}));
-            res.end(JSON.stringify({ ...u, top }));
+            // GET запрос для обновления данных
+            const uid = String(parsedUrl.query.userId);
+            const u = getUpdatedUser(db, uid);
+            res.end(JSON.stringify(u));
         }
     } else {
         res.end("OK");
     }
 });
 
-// ЗАПУСК С ОЧИСТКОЙ КОНФЛИКТОВ
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, '0.0.0.0', () => console.log(`API на порту ${PORT}`));
+server.listen(PORT, '0.0.0.0');
 
 async function startup() {
     try {
-        console.log("Сброс старых соединений...");
         await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-        await bot.launch();
-        console.log("✅ БОТ ЗАПУЩЕН!");
-    } catch (e) {
-        if (e.response && e.response.error_code === 409) {
-            console.log("Конфликт 409! Перезапуск через 5 сек...");
-            setTimeout(startup, 5000);
-        } else {
-            console.error("Ошибка:", e);
-        }
-    }
+        bot.launch();
+    } catch (e) { setTimeout(startup, 5000); }
 }
-
 startup();
-
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
