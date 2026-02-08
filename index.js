@@ -10,6 +10,7 @@ const DB_PATH = './database.json';
 
 const bot = new Telegraf(BOT_TOKEN);
 
+// База данных
 function readDB() {
     try {
         if (!fs.existsSync(DB_PATH)) fs.writeFileSync(DB_PATH, JSON.stringify({}));
@@ -37,19 +38,22 @@ function getUpdatedUser(db, uid, name = "Рыбак") {
 }
 
 bot.start(async (ctx) => {
-    const uid = String(ctx.from.id);
-    const refId = ctx.startPayload;
-    let db = readDB();
-    const isNew = !db[uid];
-    getUpdatedUser(db, uid, ctx.from.first_name);
-    if (isNew && refId && refId !== uid && db[refId]) {
-        db[refId].boxes = (db[refId].boxes || 0) + 1;
-        bot.telegram.sendMessage(refId, `📦 Вам начислен ящик за друга!`).catch(() => {});
-    }
-    writeDB(db);
-    ctx.reply(`🎣 Клев начался!`, Markup.keyboard([[Markup.button.webApp('ИГРАТЬ', 'https://criptocit-jpg.github.io/tama-fishing/')]]).resize());
+    try {
+        const uid = String(ctx.from.id);
+        const refId = ctx.startPayload;
+        let db = readDB();
+        const isNew = !db[uid];
+        getUpdatedUser(db, uid, ctx.from.first_name);
+        if (isNew && refId && refId !== uid && db[refId]) {
+            db[refId].boxes = (db[refId].boxes || 0) + 1;
+            bot.telegram.sendMessage(refId, `📦 Вам начислен ящик за друга!`).catch(() => {});
+        }
+        writeDB(db);
+        ctx.reply(`🎣 Клев начался!`, Markup.keyboard([[Markup.button.webApp('ИГРАТЬ', 'https://criptocit-jpg.github.io/tama-fishing/')]]).resize());
+    } catch (e) { console.error("Start error", e); }
 });
 
+// HTTP Сервер для API
 const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -59,7 +63,6 @@ const server = http.createServer((req, res) => {
     const parsedUrl = url.parse(req.url, true);
     let db = readDB();
 
-    // ЕДИНЫЙ ПУТЬ ДЛЯ ВСЕХ ДЕЙСТВИЙ
     if (parsedUrl.pathname === '/api/action') {
         if (req.method === 'POST') {
             let body = '';
@@ -73,7 +76,7 @@ const server = http.createServer((req, res) => {
 
                     if (data.action === 'catch_fish' && u.energy > 0) {
                         u.energy--; u.rod_durability -= (u.titanLine ? 1 : 2);
-                        let w = parseFloat((Math.random() * 1.5 * (u.baitBoost || 1)).toFixed(2));
+                        let w = parseFloat((Math.random() * 1.5).toFixed(2));
                         u.fish = parseFloat((u.fish + w).toFixed(2)); u.xp += 25;
                         msg = `Улов: ${w}кг`;
                         if (u.xp >= (u.level * 400)) { u.level++; u.xp = 0; msg = "🎊 УРОВЕНЬ ПОВЫШЕН!"; }
@@ -92,23 +95,42 @@ const server = http.createServer((req, res) => {
                 } catch(e) { res.end(JSON.stringify({error: true})); }
             });
         } else {
-            // GET запрос для обновления данных
-            const uid = String(parsedUrl.query.userId);
+            const uid = String(parsedUrl.query.userId || "");
             const u = getUpdatedUser(db, uid);
             res.end(JSON.stringify(u));
         }
     } else {
+        res.writeHead(200);
         res.end("OK");
     }
 });
 
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, '0.0.0.0');
+server.listen(PORT, '0.0.0.0', () => console.log(`API port: ${PORT}`));
 
-async function startup() {
+// ФУНКЦИЯ БЕЗОПАСНОГО ЗАПУСКА
+async function safeLaunch() {
     try {
+        console.log("Очистка старых сессий...");
         await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-        bot.launch();
-    } catch (e) { setTimeout(startup, 5000); }
+        // Даем время старой копии завершиться
+        setTimeout(async () => {
+            try {
+                await bot.launch();
+                console.log("✅ БОТ УСПЕШНО ЗАПУЩЕН!");
+            } catch (err) {
+                if (err.response && err.response.error_code === 409) {
+                    console.log("Конфликт всё еще есть, пробую снова...");
+                    safeLaunch();
+                }
+            }
+        }, 3000); 
+    } catch (e) {
+        console.error("Ошибка в safeLaunch:", e);
+    }
 }
-startup();
+
+safeLaunch();
+
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
