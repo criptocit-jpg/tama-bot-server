@@ -4,15 +4,13 @@ const http = require('http');
 const url = require('url');
 
 const BOT_TOKEN = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg';
-const ADMIN_ID = '7883085758'; 
+const ADMIN_GROUP_ID = '-5110681605'; // ТВОЯ ГРУППА
 const DB_PATH = './database.json';
 
 const ECO = { 
     FISH_PRICE: 0.5, 
     REPAIR_COST: 10, 
-    BAIT_COST: 25,
     REGEN_TIME: 900000,
-    GOLDEN_HOUR: 19,
     MIN_WITHDRAW: 30000 
 };
 
@@ -34,8 +32,7 @@ function getUpdatedUser(db, uid, name = "Рыбак") {
     if (!db[uid]) {
         db[uid] = { 
             balance: 0, fish: 0, rod_durability: 100, level: 1, xp: 0, 
-            energy: 15, lastRegen: Date.now(), baits: 0, name: name,
-            unlockedLocs: ['Заводь'], currentLoc: 'Заводь'
+            energy: 15, lastRegen: Date.now(), name: name
         };
     }
     const u = db[uid];
@@ -63,12 +60,10 @@ const server = http.createServer((req, res) => {
         const uid = String(parsedUrl.query.userId);
         if (uid && uid !== "undefined") {
             const u = getUpdatedUser(db, uid);
-            // Добавляем ТОП-3 в ответ
             const top = Object.values(db)
                 .sort((a, b) => b.balance - a.balance)
-                .slice(0, 3)
+                .slice(0, 10)
                 .map(i => ({n: i.name || "Рыбак", b: i.balance}));
-            
             res.writeHead(200, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ ...u, top }));
         }
@@ -89,15 +84,10 @@ const server = http.createServer((req, res) => {
                     else if (u.rod_durability <= 0) msg = "⚠️ Удочка сломана!";
                     else {
                         u.energy -= 1; u.rod_durability -= 2;
-                        if (u.rod_durability < 15 && Math.random() < 0.25) msg = "💥 ОБРЫВ ЛЕСКИ!";
-                        else if (Math.random() < 0.1) msg = "👞 Выловил старый сапог...";
-                        else {
-                            let w = parseFloat((Math.random() * 1.5 * (1 + u.level * 0.1)).toFixed(2));
-                            if (new Date().getHours() === ECO.GOLDEN_HOUR) { w *= 2; msg = "🌟 КОСЯК! "; }
-                            u.fish = parseFloat((u.fish + w).toFixed(2));
-                            u.xp += 25; msg += `Поймал: ${w}кг`;
-                            if (u.xp >= (u.level * 400)) { u.level++; u.xp = 0; msg = "🎊 НОВЫЙ РАНГ!"; }
-                        }
+                        let w = parseFloat((Math.random() * 1.5 * (1 + u.level * 0.1)).toFixed(2));
+                        u.fish = parseFloat((u.fish + w).toFixed(2));
+                        u.xp += 25; msg = `Поймал: ${w}кг`;
+                        if (u.xp >= (u.level * 400)) { u.level++; u.xp = 0; msg = "🎊 НОВЫЙ РАНГ!"; }
                     }
                 }
 
@@ -108,13 +98,16 @@ const server = http.createServer((req, res) => {
                 }
 
                 if (data.action === 'repair_rod' && u.balance >= ECO.REPAIR_COST) {
-                    u.balance -= ECO.REPAIR_COST; u.rod_durability = 100; msg = "Удочка исправна!";
+                    u.balance -= ECO.REPAIR_COST; u.rod_durability = 100; msg = "Удочка как новая!";
                 }
 
                 if (data.action === 'withdraw') {
-                    bot.telegram.sendMessage(ADMIN_ID, `💰 ВЫВОД\nID: ${uid}\nКошелек: ${data.wallet}\nСумма: ${data.amount} TC`, 
-                    Markup.inlineKeyboard([[Markup.button.callback('✅ ОПЛАЧЕНО', `pay_${uid}_${data.amount}`)]]));
-                    msg = "📩 Заявка принята!";
+                    if (u.balance >= data.amount && data.amount >= ECO.MIN_WITHDRAW) {
+                        u.balance -= data.amount;
+                        bot.telegram.sendMessage(ADMIN_GROUP_ID, `💰 ЗАЯВКА\nID: ${uid}\nИмя: ${u.name}\nКошелек: ${data.wallet}\nСумма: ${data.amount} TC`, 
+                        Markup.inlineKeyboard([[Markup.button.callback('✅ ОПЛАЧЕНО', `pay_${uid}_${data.amount}`)]]));
+                        msg = "📩 Заявка в группе админа!";
+                    } else msg = "❌ Ошибка суммы!";
                 }
 
                 writeDB(db);
@@ -129,16 +122,14 @@ const server = http.createServer((req, res) => {
 
 bot.action(/pay_(.+)_(.+)/, (ctx) => {
     const [_, uid, amount] = ctx.match;
-    bot.telegram.sendMessage(uid, `🎉 Выплата ${amount} TC проведена!`).catch(e=>{});
-    ctx.editMessageText(ctx.update.callback_query.message.text + "\n\n✅ ВЫПОЛНЕНО");
+    bot.telegram.sendMessage(uid, `🎉 Выплата ${amount} TC успешно переведена!`).catch(e=>{});
+    ctx.editMessageText(ctx.update.callback_query.message.text + "\n\n✅ СТАТУС: ОПЛАЧЕНО");
 });
 
 bot.start(ctx => {
-    ctx.reply('🌊 TAMA FISHING\nЗарабатывай на рыбалке!', 
-    Markup.keyboard([[Markup.button.webApp('🎣 ИГРАТЬ', 'https://criptocit-jpg.github.io/tama-fishing/')]]).resize());
+    ctx.reply('🎣 Добро пожаловать в Tama Fishing!', 
+    Markup.keyboard([[Markup.button.webApp('ИГРАТЬ', 'https://criptocit-jpg.github.io/tama-fishing/')]]).resize());
 });
 
-const PORT = process.env.PORT || 10000;
-server.listen(PORT, '0.0.0.0', () => console.log(`🚀 Сервер на порту ${PORT}`));
+server.listen(process.env.PORT || 10000, '0.0.0.0');
 bot.launch();
-
