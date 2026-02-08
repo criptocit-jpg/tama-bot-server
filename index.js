@@ -1,64 +1,57 @@
 const { Telegraf, Markup } = require('telegraf');
 const fs = require('fs');
-const http = require('http'); // Добавлено для хостинга
+const http = require('http');
 
 const BOT_TOKEN = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg';
 const DB_PATH = './database.json';
-const ADMIN_ID = 7883085758;
-const WEB_APP_URL = 'https://criptocit-jpg.github.io/tama-fishing/index.html';
-
 const bot = new Telegraf(BOT_TOKEN);
 
-// Заглушка для хостинга, чтобы он не отключал бота
-http.createServer((req, res) => {
-    res.writeHead(200);
-    res.end('Bot is running');
-}).listen(process.env.PORT || 3000);
+// Чтение/запись базы
+function readDB() { try { return JSON.parse(fs.readFileSync(DB_PATH, 'utf8')); } catch (e) { return {}; } }
+function writeDB(db) { fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2)); }
 
-function readDB() {
-    try {
-        if (!fs.existsSync(DB_PATH)) return {};
-        const data = fs.readFileSync(DB_PATH, 'utf8');
-        return data ? JSON.parse(data) : {};
-    } catch (e) { return {}; }
-}
+// СЕРВЕР ДЛЯ ПРИЕМА ЗАПРОСОВ (API)
+const server = http.createServer(async (req, res) => {
+    // Разрешаем запросы с любого адреса (CORS)
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-function writeDB(data) {
-    fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
-}
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
-bot.on('web_app_data', async (ctx) => {
-    const db = readDB();
-    const id = ctx.from.id;
-    if (!db[id]) db[id] = { name: ctx.from.first_name, balance: 0, fish: 0, energy: 15 };
-    
-    let rawData;
-    try {
-        const dataField = ctx.webAppData.data;
-        const jsonString = typeof dataField.text === 'function' ? await dataField.text() : dataField;
-        rawData = JSON.parse(jsonString);
-    } catch (e) { return; }
+    if (req.url === '/api/action' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk.toString());
+        req.on('end', async () => {
+            const data = JSON.parse(body);
+            const db = readDB();
+            const id = data.userId;
+            if (!db[id]) db[id] = { balance: 0, fish: 0 };
 
-    if (rawData.action === 'catch_fish') {
-        const weight = parseFloat((Math.random() * 2 + 0.5).toFixed(2));
-        db[id].fish = parseFloat((db[id].fish + weight).toFixed(2));
-        writeDB(db);
-        ctx.reply('🎣 + ' + weight + ' кг! Итого в садке: ' + db[id].fish + ' кг');
-    }
+            if (data.action === 'catch_fish') {
+                const w = parseFloat((Math.random() * 2 + 0.1).toFixed(2));
+                db[id].fish += w;
+                writeDB(db);
+                await bot.telegram.sendMessage(id, `🎣 Улов: ${w} кг! В садке: ${db[id].fish.toFixed(2)} кг`);
+            }
+            
+            if (data.action === 'sell_fish') {
+                const money = (db[id].fish * 0.1).toFixed(2);
+                db[id].balance = (parseFloat(db[id].balance) + parseFloat(money)).toFixed(2);
+                db[id].fish = 0;
+                writeDB(db);
+                await bot.telegram.sendMessage(id, `💰 Продано! Баланс: ${db[id].balance} TC`);
+            }
 
-    if (rawData.action === 'sell_fish') {
-        const gain = parseFloat((db[id].fish * 0.1).toFixed(2));
-        db[id].balance = parseFloat((db[id].balance + gain).toFixed(2));
-        db[id].fish = 0;
-        writeDB(db);
-        ctx.reply('💰 Продано! Баланс: ' + db[id].balance.toFixed(2) + ' TC');
+            res.writeHead(200);
+            res.end(JSON.stringify({ status: 'ok' }));
+        });
+    } else {
+        res.writeHead(200);
+        res.end('Bot server is live!');
     }
 });
 
-bot.start((ctx) => {
-    ctx.reply('ДОБРО ПОЖАЛОВАТЬ В ТАМАКОИН! 🚀', Markup.keyboard([
-        [Markup.button.webApp('🎣 ИГРАТЬ (WEB APP)', WEB_APP_URL)]
-    ]).resize());
-});
-
-bot.launch().then(() => console.log('>>> СЕРВЕРНЫЙ БОТ 10.0 ЗАПУЩЕН <<<'));
+server.listen(process.env.PORT || 3000);
+bot.start((ctx) => ctx.reply('РЫБАЛКА В ОБЛАКЕ! 🚀', Markup.keyboard([[Markup.button.webApp('🎣 ИГРАТЬ', 'https://criptocit-jpg.github.io/tama-fishing/')]]).resize()));
+bot.launch();
