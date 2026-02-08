@@ -10,24 +10,16 @@ const DB_PATH = './database.json';
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// База данных с защитой от ошибок
+// Чтение БД с защитой
 function readDB() {
     try {
         if (!fs.existsSync(DB_PATH)) fs.writeFileSync(DB_PATH, JSON.stringify({}));
-        const data = fs.readFileSync(DB_PATH, 'utf8');
-        return JSON.parse(data || '{}');
-    } catch (e) { 
-        console.error("Ошибка чтения БД:", e);
-        return {}; 
-    }
+        return JSON.parse(fs.readFileSync(DB_PATH, 'utf8') || '{}');
+    } catch (e) { return {}; }
 }
 
 function writeDB(db) {
-    try {
-        fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
-    } catch (e) {
-        console.error("Ошибка записи БД:", e);
-    }
+    try { fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2)); } catch (e) {}
 }
 
 function getUpdatedUser(db, uid, name = "Рыбак") {
@@ -50,11 +42,11 @@ function getUpdatedUser(db, uid, name = "Рыбак") {
     return u;
 }
 
-// ИСПРАВЛЕННЫЙ START
+// Старт бота
 bot.start(async (ctx) => {
     try {
         const uid = String(ctx.from.id);
-        const refId = ctx.startPayload ? String(ctx.startPayload) : null; 
+        const refId = ctx.startPayload ? String(ctx.startPayload) : null;
         let db = readDB();
         const isNew = !db[uid];
         
@@ -62,47 +54,41 @@ bot.start(async (ctx) => {
 
         if (isNew && refId && refId !== uid && db[refId]) {
             db[refId].boxes = (db[refId].boxes || 0) + 1;
-            bot.telegram.sendMessage(refId, `📦 Вам начислен "Забытый ящик" за приглашение друга!`).catch(e => console.log("Не смог отправить уведомление рефу"));
+            bot.telegram.sendMessage(refId, `📦 Вам начислен "Забытый ящик" за друга!`).catch(() => {});
         }
         
         writeDB(db);
-        await ctx.reply(`🎣 Привет, ${ctx.from.first_name}! Жми кнопку ниже, чтобы начать.`, 
+        await ctx.reply(`🎣 Привет, ${ctx.from.first_name}! Удачного клева!`, 
             Markup.keyboard([[Markup.button.webApp('ИГРАТЬ', 'https://criptocit-jpg.github.io/tama-fishing/')]]).resize()
         );
-    } catch (err) {
-        console.error("Критическая ошибка в /start:", err);
-    }
+    } catch (e) { console.error("Ошибка Start:", e); }
 });
 
-// АДМИНКА
-bot.command('admin', (ctx) => {
+// Админ-панель
+bot.command('admin', async (ctx) => {
     const uid = String(ctx.from.id);
     if (uid !== SUPER_ADMIN_ID && String(ctx.chat.id) !== ADMIN_GROUP_ID) return;
-    
     const args = ctx.message.text.split(' ');
     const cmd = args[1];
     let db = readDB();
 
     if (cmd === 'list') {
-        let list = "👤 **ИГРОКИ:**\n";
-        const keys = Object.keys(db).slice(-10);
-        if (keys.length === 0) list += "Игроков пока нет.";
-        keys.forEach(id => {
+        let list = "👥 ИГРОКИ:\n";
+        Object.keys(db).slice(-10).forEach(id => {
             list += `🔹 ${db[id].name} | ID: \`${id}\` | 💰 ${Math.floor(db[id].balance)}\n`;
         });
         ctx.reply(list, { parse_mode: 'Markdown' });
     }
-
     if (cmd === 'give' && args[2] && args[3]) {
         if (db[args[2]]) {
             db[args[2]].balance += parseFloat(args[3]);
             writeDB(db);
-            ctx.reply(`✅ Выдано ${args[3]} монет игроку ${args[2]}`);
-        } else ctx.reply("❌ ID не найден");
+            ctx.reply("✅ Выдано!");
+        }
     }
 });
 
-// СЕРВЕР С ОБРАБОТКОЙ ОШИБОК
+// API и HTTP Сервер
 const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -123,30 +109,26 @@ const server = http.createServer((req, res) => {
                 if (u.banned) return res.end(JSON.stringify({ banned: true }));
 
                 let msg = "";
-                if (data.action === 'catch_fish') {
-                    if (u.energy > 0 && u.rod_durability > 0) {
-                        u.energy -= 1;
-                        u.rod_durability -= (u.titanLine ? 1 : 2);
-                        let w = parseFloat((Math.random() * 1.5 * (1 + u.level * 0.1) * (u.baitBoost || 1)).toFixed(2));
-                        u.fish = parseFloat((u.fish + w).toFixed(2));
-                        u.xp += 25;
-                        msg = `Поймал: ${w}кг`;
-                        if (u.xp >= (u.level * 400)) { u.level++; u.xp = 0; msg = "🎊 НОВЫЙ РАНГ!"; }
-                    } else msg = "🔋 Нет энергии или сломана удочка!";
+                if (data.action === 'catch_fish' && u.energy > 0 && u.rod_durability > 0) {
+                    u.energy -= 1;
+                    u.rod_durability -= (u.titanLine ? 1 : 2);
+                    let w = parseFloat((Math.random() * 1.5 * (1 + u.level * 0.1) * (u.baitBoost || 1)).toFixed(2));
+                    u.fish = parseFloat((u.fish + w).toFixed(2));
+                    u.xp += 25; msg = `Поймал: ${w}кг`;
+                    if (u.xp >= (u.level * 400)) { u.level++; u.xp = 0; msg = "🎊 РАНГ АП!"; }
                 }
 
                 if (data.action === 'open_box' && u.boxes > 0) {
                     u.boxes -= 1;
                     const win = [5000, 10000, 15000, 25000, 50000][Math.floor(Math.random() * 5)];
-                    u.balance += win;
-                    msg = `🎁 В ящике было ${win} TC!`;
+                    u.balance += win; msg = `🎁 В ящике было ${win} TC!`;
                 }
 
                 if (data.action === 'buy_stars') {
                     const shop = {
-                        'titan_line': { t: 'Титановая леска', d: 'Прочность -1 вместо -2', p: 50 },
-                        'gold_bait': { t: 'Золотая каша', d: '+50% к весу рыбы', p: 100 },
-                        'energy_pack': { t: 'Энергетик', d: '+30 энергии мгновенно', p: 30 }
+                        'titan_line': { t: 'Титановая леска', d: 'Прочность -1', p: 50 },
+                        'gold_bait': { t: 'Золотая каша', d: '+50% веса', p: 100 },
+                        'energy_pack': { t: 'Энергетик', d: '+30 энергии', p: 30 }
                     };
                     const item = shop[data.id];
                     if (item) {
@@ -154,17 +136,14 @@ const server = http.createServer((req, res) => {
                             title: item.t, description: item.d, payload: data.id,
                             provider_token: "", currency: "XTR",
                             prices: [{ label: item.t, amount: item.p }]
-                        }).catch(e => console.error("Invoice fail:", e));
-                        msg = "💳 Счет отправлен!";
+                        }).catch(e => console.error(e));
+                        msg = "💳 Счет в чате!";
                     }
                 }
 
                 writeDB(db);
                 res.end(JSON.stringify({ ...u, msg }));
-            } catch (e) { 
-                console.error("API Error:", e);
-                res.end(JSON.stringify({ error: true })); 
-            }
+            } catch (e) { res.end(JSON.stringify({ error: true })); }
         });
         return;
     }
@@ -176,6 +155,7 @@ const server = http.createServer((req, res) => {
     }
 });
 
+// Платежи и выплаты
 bot.on('pre_checkout_query', (ctx) => ctx.answerPreCheckoutQuery(true));
 bot.on('successful_payment', (ctx) => {
     let db = readDB();
@@ -185,19 +165,31 @@ bot.on('successful_payment', (ctx) => {
     if (p === 'gold_bait') u.baitBoost = 1.5;
     if (p === 'energy_pack') u.energy += 30;
     writeDB(db);
-    ctx.reply('✅ Покупка прошла успешно!');
+    ctx.reply('✅ Покупка прошла!');
 });
 
 bot.action(/pay_(.+)_(.+)/, (ctx) => {
-    const [_, uid, amount] = ctx.match;
-    bot.telegram.sendMessage(uid, `🎉 Выплата подтверждена!`).catch(e => {});
     ctx.editMessageText(ctx.update.callback_query.message.text + "\n\n✅ ОПЛАЧЕНО");
 });
 
+// ЗАПУСК: Слушаем порт и чистим старые сессии
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, '0.0.0.0', () => console.log(`Server on port ${PORT}`));
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server is running on port ${PORT}`);
+});
 
-bot.launch().catch(e => console.error("Bot launch fail:", e));
+async function launch() {
+    try {
+        await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+        await bot.launch();
+        console.log("Бот запущен успешно!");
+    } catch (e) {
+        console.error("Ошибка запуска:", e);
+        setTimeout(launch, 5000); // Рестарт через 5 сек при ошибке 409
+    }
+}
+
+launch();
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
