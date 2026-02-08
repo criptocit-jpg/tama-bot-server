@@ -2,125 +2,129 @@ const { Telegraf, Markup } = require('telegraf');
 const fs = require('fs');
 const http = require('http');
 
-// --- НАСТРОЙКИ ---
+// --- КОНФИГУРАЦИЯ ---
 const BOT_TOKEN = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg';
-const ADMIN_ID = 569502967; // Твой ID
+const ADMIN_ID = 569502967; 
 const DB_PATH = './database.json';
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// --- РАБОТА С БАЗОЙ ДАННЫХ (БЕЗ СОКРАЩЕНИЙ) ---
+// --- ЭКОНОМИКА (РАСЧЕТЫ ИЗ 0.5 TC ЗА КГ) ---
+const ECO = {
+    FISH_PRICE: 0.5,        // Цена за 1 кг
+    REPAIR_COST: 5,         // Ремонт удочки (10 кг рыбы)
+    UPGRADE_COST: 50,       // Улучшение (100 кг рыбы)
+    MIN_WITHDRAW: 30000,    // Вывод от 30к TC (нужно выловить 60 тонн рыбы)
+    DURABILITY_LOSS: 0.5    // Снятие прочности за один заброс
+};
+
+// --- СИСТЕМА БАЗЫ ДАННЫХ ---
 function readDB() {
     try {
-        if (!fs.existsSync(DB_PATH)) {
-            const initialData = {};
-            fs.writeFileSync(DB_PATH, JSON.stringify(initialData));
-            return initialData;
-        }
+        if (!fs.existsSync(DB_PATH)) return {};
         const data = fs.readFileSync(DB_PATH, 'utf8');
         return data ? JSON.parse(data) : {};
-    } catch (e) {
-        console.error("Ошибка чтения БД:", e);
-        return {};
-    }
+    } catch (e) { return {}; }
 }
 
 function writeDB(db) {
     try {
         fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
-    } catch (e) {
-        console.error("Ошибка записи БД:", e);
-    }
+    } catch (e) { console.error("Ошибка БД:", e); }
 }
 
-// --- ГЛАВНОЕ МЕНЮ (КРАСОЧНОЕ) ---
-const showMainMenu = (ctx) => {
-    return ctx.reply('🌊 *ДОБРО ПОЖАЛОВАТЬ В TAMA FISHING!* 🌊\n\nЗдесь ты можешь ловить рыбу, копить монеты и заработать на свой первый мотоцикл! 🏍️\n\nВыбери раздел меню ниже:', {
+// --- ГЛАВНОЕ МЕНЮ ---
+const mainMenu = (ctx) => {
+    return ctx.reply('🌊 *TAMA FISHING WORLD* 🌊\n\nТвой путь к первому мотоциклу начинается здесь! 🏍️\nЛови рыбу, торгуй и развивайся.', {
         parse_mode: 'Markdown',
         ...Markup.keyboard([
-            [Markup.button.webApp('🎣 ИГРАТЬ (WEB APP)', 'https://criptocit-jpg.github.io/tama-fishing/')],
+            [Markup.button.webApp('🎣 РЫБАЧИТЬ', 'https://criptocit-jpg.github.io/tama-fishing/')],
             ['🎒 САДОК', '🛒 МАГАЗИН'],
             ['👥 РЕФЕРАЛЫ', 'ℹ️ ИНФО']
         ]).resize()
     });
 };
 
-// --- АДМИН-ПАНЕЛЬ (РЕЖИМ БОГА) ---
+// --- АДМИНКА (РЕЖИМ БОГА) ---
 bot.command('admin', (ctx) => {
-    if (ctx.from.id !== ADMIN_ID) return ctx.reply('⛔ У вас нет прав доступа.');
-    
-    ctx.reply('🛠 *ПАНЕЛЬ АДМИНИСТРАТОРА (GOD MODE)*\n\nУправляйте проектом в одно нажатие:', {
+    if (ctx.from.id !== ADMIN_ID) return;
+    ctx.reply('⚡ *ADMIN GOD MODE* ⚡\n\nВыбери инструмент управления:', {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
-            [Markup.button.callback('📢 Рассылка всем', 'admin_broadcast'), Markup.button.callback('👤 Юзер по ID', 'admin_find_user')],
-            [Markup.button.callback('💰 Выдать TC', 'admin_give_money'), Markup.button.callback('📡 Выдать Эхолот', 'admin_give_sonar')],
-            [Markup.button.callback('🚫 Бан / Разбан', 'admin_ban')],
-            [Markup.button.callback('📊 Статистика проекта', 'admin_stats')]
+            [Markup.button.callback('📢 Рассылка всем', 'adm_broadcast')],
+            [Markup.button.callback('💰 Выдать TC себе', 'adm_add_me'), Markup.button.callback('📡 Выдать Эхолот', 'adm_sonar_me')],
+            [Markup.button.callback('🚫 Бан / Разбан', 'adm_ban_panel'), Markup.button.callback('👤 Юзер по ID', 'adm_user_info')],
+            [Markup.button.callback('📊 Статс', 'adm_stats')]
         ])
     });
 });
 
-// --- САДОК (ПРОФИЛЬ ИГРОКА) ---
+// --- САДОК (СОСТОЯНИЕ ИГРОКА) ---
 bot.hears('🎒 САДОК', (ctx) => {
     const db = readDB();
-    const user = db[ctx.from.id];
+    const user = db[ctx.from.id] || { balance: 0, fish: 0, rod_durability: 100 };
     
-    if (!user) return ctx.reply('❌ Сначала нажми /start');
+    let status = user.rod_durability > 20 ? '✅ Исправна' : '⚠️ Требует ремонта';
+    if (user.rod_durability <= 0) status = '❌ Сломана';
 
-    const text = `👤 *РЫБАК:* ${ctx.from.first_name}\n` +
-                 `🆔 *ID:* \`${ctx.from.id}\`\n\n` +
-                 `💰 *БАЛАНС:* ${user.balance.toLocaleString()} TC\n` +
-                 `🐟 *В САДКЕ:* ${user.fish} кг\n` +
-                 `🎣 *УДОЧКА:* ${user.rod_durability}% прочности\n\n` +
-                 `💳 *ВЫВОД СРЕДСТВ:* От 30,000 TC`;
+    const text = `👤 *ИГРОК:* ${ctx.from.first_name}\n` +
+                 `🆔 *ID:* \`${ctx.from.id}\`\n` +
+                 `──────────────────\n` +
+                 `💰 *БАЛАНС:* ${user.balance.toFixed(2)} TC\n` +
+                 `🐟 *РЫБА:* ${user.fish.toFixed(2)} кг\n` +
+                 `🎣 *УДОЧКА:* ${user.rod_durability}% (${status})\n` +
+                 `──────────────────\n` +
+                 `📥 *ВЫВОД:* От ${ECO.MIN_WITHDRAW.toLocaleString()} TC`;
 
     ctx.reply(text, {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
-            [Markup.button.callback('💸 ВЫВЕСТИ TC', 'withdraw_req')],
-            [Markup.button.callback('🔧 ПОЧИНИТЬ УДОЧКУ', 'repair_rod')]
+            [Markup.button.callback('💳 ЗАПРОС НА ВЫВОД', 'withdraw_req')],
+            [Markup.button.callback(`🛠 РЕМОНТ (${ECO.REPAIR_COST} TC)`, 'repair_action')]
         ])
     });
 });
 
-// --- МАГАЗИН (ДВА ВИДА ТОВАРОВ) ---
+// --- МАГАЗИН (2 ТИПА ТОВАРОВ) ---
 bot.hears('🛒 МАГАЗИН', (ctx) => {
-    ctx.reply('🛒 *РЫБОЛОВНЫЙ МАГАЗИН*\n\n🔹 *ЗА МОНЕТЫ (TC):*\n• Приманка, Ремонт, Улучшения\n\n🔸 *ЗА ТОН (USDT):*\n• Эхолоты, Новые локации', {
+    ctx.reply('🛒 *РЫБОЛОВНЫЙ ПРИЛАВОК*\n\n🔹 *ЗА ВАЛЮТУ (TC):*', {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
-            [Markup.button.callback('🪱 Купить приманку', 'shop_bait'), Markup.button.callback('🛠 Ремонт (100 TC)', 'shop_repair')],
-            [Markup.button.callback('⏫ Улучшить удочку', 'shop_upgrade')],
-            [Markup.button.callback('📡 Эхолот (0.5 USDT)', 'shop_sonar_ton')],
-            [Markup.button.callback('🏝 Озеро Надежды (1 USDT)', 'shop_loc_ton')]
+            [Markup.button.callback('🪱 Приманка (1 TC)', 'buy_bait')],
+            [Markup.button.callback(`📈 Улучшить удочку (${ECO.UPGRADE_COST} TC)`, 'upgrade_rod')],
+            [Markup.button.url('📡 Эхолот (0.5 USDT)', 'https://t.me/send?start=IV123')], // Пример оплаты
+            [Markup.button.url('🌊 Озеро Надежды (1 USDT)', 'https://t.me/send?start=IV456')]
         ])
     });
 });
 
-// --- РЕФЕРАЛКА (С ЗАЩИТОЙ ОТ БОТОВ) ---
+// --- РЕФЕРАЛКА (КОРОБКИ УДАЧИ) ---
 bot.hears('👥 РЕФЕРАЛЫ', (ctx) => {
     const db = readDB();
-    const user = db[ctx.from.id];
-    const refLink = `https://t.me/твой_бот?start=${ctx.from.id}`;
+    const user = db[ctx.from.id] || { boxes: 0 };
+    const refLink = `https://t.me/твой_бот_username?start=${ctx.from.id}`;
 
-    ctx.reply(`👥 *РЕФЕРАЛЬНАЯ СИСТЕМА*\n\nЗа каждого активного друга ты получаешь *3 Коробки Удачи*! 🎁\n\n⚠️ *Условие:* Друг должен поймать 5 кг рыбы.\n\n🔗 *Твоя ссылка:* \n\`${refLink}\`\n\n📦 Доступно коробок: *${user.boxes || 0}*`, {
+    ctx.reply(`👥 *РЕФЕРАЛЬНАЯ ПРОГРАММА*\n\nЗа каждого друга — *3 Коробки Удачи* 🎁\n\n` +
+              `⚠️ *Условие:* Друг должен выловить 5 кг рыбы.\n\n` +
+              `🔗 Твоя ссылка:\n\`${refLink}\`\n\n` +
+              `📦 Доступно коробок: *${user.boxes || 0}*`, {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
-            [Markup.button.callback('🎁 ОТКРЫТЬ КОРОБКУ', 'open_box')]
+            [Markup.button.callback('🎁 ОТКРЫТЬ КОРОБКУ', 'open_luck_box')]
         ])
     });
 });
 
 // --- ИНФО ---
 bot.hears('ℹ️ ИНФО', (ctx) => {
-    ctx.reply(`📖 *ИНФОРМАЦИЯ И ПРАВИЛА*\n\n` +
-              `• 1 кг обычной рыбы = 100 TC\n` +
-              `• Ремонт удочки необходим каждые 50 забросов.\n` +
-              `• Вывод средств: на кошелек TON (USDT).\n` +
-              `• Минимальный вывод: 30,000 TC.\n\n` +
-              `*Средства крутятся внутри экосистемы и обеспечивают ликвидность проекта.*`, { parse_mode: 'Markdown' });
+    ctx.reply(`ℹ️ *СПРАВКА ПО ПРОЕКТУ*\n\n` +
+              `💸 *Экономика:* 1 кг = ${ECO.FISH_PRICE} TC.\n` +
+              `🎣 *Износ:* Удочка понемногу тупится при каждом забросе.\n` +
+              `💳 *Выплаты:* От ${ECO.MIN_WITHDRAW} TC на TON/USDT.\n\n` +
+              `*Весь TC обеспечен оборотом внутри игры. Стейкайте, ловите, побеждайте!*`, { parse_mode: 'Markdown' });
 });
 
-// --- ОБРАБОТКА СТАРТА И РЕФЕРАЛОВ ---
+// --- ЛОГИКА СТАРТА ---
 bot.start((ctx) => {
     const db = readDB();
     const userId = ctx.from.id;
@@ -134,18 +138,18 @@ bot.start((ctx) => {
             boxes: 0,
             referredBy: (refId && refId != userId) ? refId : null,
             refCompleted: false,
-            isBanned: false
+            isBanned: false,
+            inventory: []
         };
         writeDB(db);
-        
         if (refId && refId != userId) {
-            bot.telegram.sendMessage(refId, "🔔 У вас новый реферал! Коробки удачи придут, когда он поймает 5 кг рыбы.");
+            bot.telegram.sendMessage(refId, "📢 У вас новый реферал! Ожидайте выполнения условий (5 кг рыбы).");
         }
     }
-    showMainMenu(ctx);
+    mainMenu(ctx);
 });
 
-// --- API СЕРВЕР ДЛЯ WEB APP (БЕЗ СОКРАЩЕНИЙ) ---
+// --- СЕРВЕР ДЛЯ WEB APP (API) ---
 const server = http.createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
@@ -162,41 +166,36 @@ const server = http.createServer(async (req, res) => {
                 const db = readDB();
                 const id = data.userId;
 
-                if (!id || !db[id]) return;
-                if (db[id].isBanned) return;
+                if (!id || !db[id] || db[id].isBanned) return;
 
                 if (data.action === 'catch_fish') {
-                    // Логика экономики: шанс и износ
                     if (db[id].rod_durability <= 0) {
-                        await bot.telegram.sendMessage(id, "⚠️ Твоя удочка сломана! Почини её в Садке.");
+                        await bot.telegram.sendMessage(id, "🪫 Удочка сломана! Почини её в Садке.");
                         return;
                     }
+                    
+                    const weight = parseFloat((Math.random() * 1.8 + 0.1).toFixed(2));
+                    db[id].fish += weight;
+                    db[id].rod_durability -= ECO.DURABILITY_LOSS;
 
-                    const weight = parseFloat((Math.random() * 2.5 + 0.1).toFixed(2));
-                    db[id].fish = parseFloat((db[id].fish + weight).toFixed(2));
-                    db[id].rod_durability -= 1; // Износ
-
-                    // Проверка реферального условия
+                    // Реферальная проверка
                     if (db[id].referredBy && !db[id].refCompleted && db[id].fish >= 5) {
-                        const refId = db[id].referredBy;
-                        if (db[refId]) {
-                            db[refId].boxes += 3;
+                        const rId = db[id].referredBy;
+                        if (db[rId]) {
+                            db[rId].boxes += 3;
                             db[id].refCompleted = true;
-                            bot.telegram.sendMessage(refId, "🎁 Твой друг поймал 5 кг! Тебе начислено 3 Коробки Удачи!");
+                            bot.telegram.sendMessage(rId, "🎁 Реферал выловил 5 кг! Вам начислено 3 Коробки Удачи!");
                         }
                     }
-
                     writeDB(db);
-                    await bot.telegram.sendMessage(id, `🎣 Ты поймал рыбу на ${weight} кг!`, { disable_notification: true });
                 }
 
                 if (data.action === 'sell_fish') {
-                    const price = 100; // 100 TC за кг
-                    const gain = Math.floor(db[id].fish * price);
+                    const gain = db[id].fish * ECO.FISH_PRICE;
                     db[id].balance += gain;
                     db[id].fish = 0;
                     writeDB(db);
-                    await bot.telegram.sendMessage(id, `💰 Рыба продана за ${gain} TC!`);
+                    await bot.telegram.sendMessage(id, `💰 Рыба продана за ${gain.toFixed(2)} TC!`);
                 }
 
                 res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -204,41 +203,55 @@ const server = http.createServer(async (req, res) => {
             } catch (e) { res.writeHead(400); res.end(); }
         });
     } else {
-        res.writeHead(200); res.end('Tama Server OK');
+        res.writeHead(200); res.end('Tama Engine Active');
     }
 });
 
-// --- ЗАПУСК ---
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Сервер на порту ${PORT}`));
-
+// --- CALLBACK ОБРАБОТЧИКИ (АДМИНКА И КНОПКИ) ---
 bot.on('callback_query', async (ctx) => {
     const db = readDB();
-    const data = ctx.callbackQuery.data;
     const userId = ctx.from.id;
+    const data = ctx.callbackQuery.data;
 
-    // Логика кнопок (Админка, Магазин и т.д.)
-    if (data === 'withdraw_req') {
-        if (db[userId].balance < 30000) return ctx.answerCbQuery('❌ Минималка 30,000 TC');
-        ctx.reply('📝 Введите ваш адрес кошелька TON для вывода:');
-        // Тут можно добавить стейт для приема адреса
-    }
-
-    if (data === 'repair_rod') {
-        if (db[userId].balance < 100) return ctx.answerCbQuery('❌ Недостаточно монет');
-        db[userId].balance -= 100;
+    // Ремонт
+    if (data === 'repair_action') {
+        if (db[userId].balance < ECO.REPAIR_COST) return ctx.answerCbQuery('❌ Недостаточно TC');
+        db[userId].balance -= ECO.REPAIR_COST;
         db[userId].rod_durability = 100;
         writeDB(db);
-        ctx.editMessageText('✅ Удочка как новая!');
+        ctx.editMessageText('✅ Удочка полностью восстановлена!');
     }
-    
-    // Админские действия
-    if (data === 'admin_stats' && userId === ADMIN_ID) {
-        const totalUsers = Object.keys(db).length;
-        ctx.reply(`📊 Игроков: ${totalUsers}\n💰 Всего в обороте: ${Object.values(db).reduce((a, b) => a + b.balance, 0)} TC`);
+
+    // Вывод
+    if (data === 'withdraw_req') {
+        if (db[userId].balance < ECO.MIN_WITHDRAW) return ctx.answerCbQuery(`❌ Минимум ${ECO.MIN_WITHDRAW} TC`);
+        // Уведомление админу
+        bot.telegram.sendMessage(ADMIN_ID, `💳 *ЗАПРОС НА ВЫВОД*\nЮзер: ${ctx.from.first_name} (\`${userId}\`)\nСумма: ${db[userId].balance} TC`, {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('✅ ОПЛАЧЕНО', `pay_done_${userId}`)]
+            ])
+        });
+        ctx.answerCbQuery('✅ Запрос отправлен админу!');
+    }
+
+    // Админская кнопка оплаты
+    if (data.startsWith('pay_done_') && userId === ADMIN_ID) {
+        const targetId = data.split('_')[2];
+        bot.telegram.sendMessage(targetId, '💎 *ВЫПЛАТА ПОДТВЕРЖДЕНА!*\nСредства отправлены на ваш кошелек. Спасибо за игру!', { parse_mode: 'Markdown' });
+        ctx.answerCbQuery('Уведомление отправлено!');
+    }
+
+    // Режим Бога: Статистика
+    if (data === 'adm_stats' && userId === ADMIN_ID) {
+        const users = Object.values(db);
+        const totalBal = users.reduce((a, b) => a + b.balance, 0);
+        ctx.reply(`📊 *ОТЧЕТ ПРОЕКТА:*\n\nИгроков: ${users.length}\nВсего TC: ${totalBal.toFixed(2)}`);
     }
 
     ctx.answerCbQuery();
 });
 
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log('Tama Server Live'));
 bot.launch();
