@@ -1,155 +1,98 @@
-const { Telegraf, Markup } = require('telegraf');
-const fs = require('fs');
-const http = require('http');
-const url = require('url');
+const express = require('express');
+const cors = require('cors');
+const app = express();
 
-const BOT_TOKEN = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg';
-const ADMIN_GROUP_ID = '-5110681605'; 
-const SUPER_ADMIN_ID = '7883085758'; 
-const DB_PATH = './database.json';
+app.use(cors());
+app.use(express.json());
 
-const bot = new Telegraf(BOT_TOKEN);
+let users = {};
 
-function readDB() {
-    try {
-        if (!fs.existsSync(DB_PATH)) fs.writeFileSync(DB_PATH, JSON.stringify({}));
-        return JSON.parse(fs.readFileSync(DB_PATH, 'utf8') || '{}');
-    } catch (e) { return {}; }
-}
-function writeDB(db) {
-    try { fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2)); } catch (e) {}
-}
+// Админка: Посмотреть количество игроков
+app.get('/api/admin/stats', (req, res) => {
+    res.json({ total_players: Object.keys(users).length });
+});
 
-function getUpdatedUser(db, uid, name = "Рыбак") {
-    if (!db[uid]) {
-        db[uid] = { 
-            balance: 0, fish: 0, rod_durability: 100, level: 1, xp: 0, 
-            energy: 15, lastRegen: Date.now(), name: name || "Рыбак",
-            titanLine: false, baitBoost: 1, wallet: null, banned: false, boxes: 0 
+app.all('/api/action', async (req, res) => {
+    const userId = req.method === 'GET' ? req.query.userId : req.body.userId;
+    const userName = req.method === 'POST' ? req.body.userName : 'Рыбак';
+    
+    if (!userId) return res.status(400).json({ error: 'No userId' });
+
+    if (!users[userId]) {
+        users[userId] = {
+            id: userId, n: userName, b: 100, energy: 50, boxes: 1, fish: 0,
+            artifacts: [], lastBonus: 0, lastUpdate: Date.now()
         };
     }
-    const u = db[uid];
-    const maxE = 15 + (u.level * 3);
+
+    const u = users[userId];
     const now = Date.now();
-    const gain = Math.floor((now - u.lastRegen) / 900000);
-    if (gain > 0) { u.energy = Math.min(maxE, u.energy + gain); u.lastRegen = now; }
-    return u;
-}
 
-// РЕФЕРАЛЫ И КОМАНДЫ
-bot.start(async (ctx) => {
-    const uid = String(ctx.from.id);
-    const refId = ctx.startPayload;
-    let db = readDB();
-    const isNew = !db[uid];
-    getUpdatedUser(db, uid, ctx.from.first_name);
-    if (isNew && refId && refId !== uid && db[refId]) {
-        db[refId].boxes = (db[refId].boxes || 0) + 1;
-        bot.telegram.sendMessage(refId, `🎁 Вам начислен сундук за приглашение друга!`).catch(() => {});
-    }
-    writeDB(db);
-    ctx.reply(`🎣 Привет, Рыбак!`, Markup.keyboard([[Markup.button.webApp('ИГРАТЬ', 'https://criptocit-jpg.github.io/tama-fishing/')]]).resize());
-});
+    if (req.method === 'POST') {
+        const { action, isDeep, wallet, amount } = req.body;
 
-bot.command('admin', (ctx) => {
-    const uid = String(ctx.from.id);
-    if (uid !== SUPER_ADMIN_ID && String(ctx.chat.id) !== ADMIN_GROUP_ID) return;
-    const args = ctx.message.text.split(' ');
-    const cmd = args[1];
-    let db = readDB();
-    if (cmd === 'list') {
-        let l = "👥 ИГРОКИ:\n";
-        Object.entries(db).slice(-15).forEach(([id, u]) => l += `🔹 ${u.name} | ID: \`${id}\` | 💰 ${Math.floor(u.balance)}\n`);
-        ctx.reply(l, { parse_mode: 'Markdown' });
-    }
-    if (cmd === 'give' && args[2]) {
-        if (db[args[2]]) { db[args[2]].balance += parseFloat(args[3]); writeDB(db); ctx.reply("✅ Готово"); }
-    }
-});
-
-// API СЕРВЕР (СИНХРОНИЗИРОВАН С HTML)
-const server = http.createServer((req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
-
-    const parsedUrl = url.parse(req.url, true);
-    let db = readDB();
-
-    if (parsedUrl.pathname === '/api/action') {
-        if (req.method === 'POST') {
-            let body = '';
-            req.on('data', c => body += c);
-            req.on('end', async () => {
-                const data = JSON.parse(body);
-                const uid = String(data.userId);
-                let u = getUpdatedUser(db, uid, data.userName);
-                let msg = "";
-
-                if (data.action === 'catch_fish') {
-                    if (u.energy > 0 && u.rod_durability > 0) {
-                        u.energy--; u.rod_durability -= (u.titanLine ? 1 : 2);
-                        let w = parseFloat((Math.random() * 1.5 * (1 + u.level * 0.1) * (u.baitBoost || 1)).toFixed(2));
-                        u.fish = parseFloat((u.fish + w).toFixed(2)); u.xp += 25; msg = `Улов: ${w}кг`;
-                        if (u.xp >= (u.level * 400)) { u.level++; u.xp = 0; msg = "🎊 УРОВЕНЬ ПОВЫШЕН!"; }
-                    } else msg = "🔋 Нет энергии или сломана удочка!";
-                }
-                if (data.action === 'sell_fish') {
-                    let g = parseFloat((u.fish * 0.5).toFixed(2));
-                    u.balance += g; u.fish = 0; msg = `Продано на ${g} TC`;
-                }
-                if (data.action === 'open_box' && u.boxes > 0) {
-                    u.boxes--;
-                    const win = [5000, 10000, 25000, 50000][Math.floor(Math.random()*4)];
-                    u.balance += win; msg = `🎁 Выпало ${win} TC!`;
-                }
-                if (data.action === 'buy_stars') {
-                    const shop = { 'titan_line': {t:'Титановая леска', d:'Прочность -1', p:50}, 'gold_bait':{t:'Золотая каша', d:'+50% веса', p:100}, 'energy_pack':{t:'Энергетик', d:'+30 энергии', p:30} };
-                    const item = shop[data.id];
-                    if (item) {
-                        await bot.telegram.sendInvoice(uid, { title: item.t, description: item.d, payload: data.id, provider_token: "", currency: "XTR", prices: [{ label: item.t, amount: item.p }] }).catch(e => console.error(e));
-                        msg = "💳 Счет выставлен!";
-                    }
-                }
-                if (data.action === 'withdraw') {
-                    if (u.balance >= data.amount && data.amount >= 30000) {
-                        u.balance -= data.amount; u.wallet = data.wallet;
-                        bot.telegram.sendMessage(ADMIN_GROUP_ID, `💰 ВЫВОД: ${u.name}\nСумма: ${data.amount}\nКошелек: \`${u.wallet}\``, Markup.inlineKeyboard([[Markup.button.callback('✅ ОПЛАЧЕНО', `pay_${uid}_${data.amount}`)]])).catch(e=>{});
-                        msg = "📩 Заявка отправлена!";
-                    } else msg = "❌ Недостаточно средств!";
-                }
-
-                writeDB(db);
-                res.end(JSON.stringify({ ...u, msg }));
-            });
-        } else {
-            const u = getUpdatedUser(db, String(parsedUrl.query.userId));
-            const top = Object.values(db).sort((a,b)=>b.balance-a.balance).slice(0,10).map(i=>({n:i.name, b:i.balance}));
-            res.end(JSON.stringify({ ...u, top }));
+        // ЕЖЕДНЕВНЫЙ БОНУС
+        if (action === 'get_bonus') {
+            if (now - u.lastBonus < 86400000) {
+                return res.json({ ...u, msg: 'Рано! Таймер еще не вышел.' });
+            }
+            u.b += 50;
+            u.lastBonus = now;
+            return res.json({ ...u, msg: 'Получено 50 TC! 💰' });
         }
-    } else { res.end("OK"); }
+
+        // РЫБАЛКА
+        if (action === 'catch_fish') {
+            const cost = isDeep ? 10 : 2;
+            if (u.energy < cost) return res.json({ ...u, msg: 'Молния! Нет энергии ⚡' });
+            
+            u.energy -= cost;
+            
+            // Проверка на Золотой Час (19:00 по серверу)
+            const hour = new Date().getHours();
+            let multiplier = (hour === 19) ? 2 : 1;
+            if (isDeep) multiplier *= 10;
+
+            // Шанс на Золотую Рыбку (0.1%)
+            if (Math.random() < 0.001) {
+                u.b += 5000;
+                return res.json({ ...u, isGoldFish: true, msg: 'О БОЖЕ! ЗОЛОТАЯ РЫБКА! +5000 TC! ✨' });
+            }
+
+            // Риск глубоководной рыбалки (30% шанс обрыва)
+            if (isDeep && Math.random() < 0.3) {
+                return res.json({ ...u, msg: 'ОБРЫВ! Леска не выдержала... ❌' });
+            }
+
+            let weight = (Math.random() * 5 + 0.5) * multiplier;
+            u.fish = (u.fish || 0) + weight;
+
+            // Шанс на артефакт (2%)
+            if (Math.random() < 0.02) {
+                let artId = Math.floor(Math.random() * 4) + 1;
+                if (Math.random() < 0.005) artId = 5; // Пятый - супер редкий
+                if (!u.artifacts.includes(artId)) {
+                    u.artifacts.push(artId);
+                    if (u.artifacts.length === 5) {
+                        u.b += 30000;
+                        return res.json({ ...u, msg: 'КОЛЛЕКЦИЯ СОБРАНА! +30,000 TC! 🏆' });
+                    }
+                    return res.json({ ...u, msg: `Выловлен артефакт #${artId}! 🏺` });
+                }
+            }
+
+            return res.json({ ...u, msg: `Улов: ${weight.toFixed(2)} кг! ${hour===19?'🌟 X2!':''}` });
+        }
+
+        if (action === 'sell_fish') {
+            let money = u.fish * 0.5;
+            u.b += money;
+            u.fish = 0;
+            return res.json({ ...u, msg: `Продано на ${money.toFixed(1)} TC 💰` });
+        }
+    }
+
+    res.json(u);
 });
 
-bot.on('pre_checkout_query', (ctx) => ctx.answerPreCheckoutQuery(true));
-bot.on('successful_payment', (ctx) => {
-    let db = readDB(); const u = getUpdatedUser(db, String(ctx.from.id));
-    const p = ctx.message.successful_payment.invoice_payload;
-    if (p === 'titan_line') u.titanLine = true;
-    if (p === 'gold_bait') u.baitBoost = 1.5;
-    if (p === 'energy_pack') u.energy += 30;
-    writeDB(db); ctx.reply('✅ Покупка прошла!');
-});
-
-bot.action(/pay_(.+)_(.+)/, (ctx) => { ctx.editMessageText(ctx.update.callback_query.message.text + "\n\n✅ ОПЛАЧЕНО"); });
-
-const PORT = process.env.PORT || 10000;
-server.listen(PORT, '0.0.0.0');
-
-async function startup() {
-    try {
-        await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-        setTimeout(() => bot.launch().catch(() => startup()), 2000);
-    } catch (e) { setTimeout(startup, 5000); }
-}
-startup();
+app.listen(3000);
