@@ -1,94 +1,133 @@
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
+const DB_FILE = './database.json';
 let users = {};
 
-// АДМИНКА
+// Загрузка базы при старте сервера
+if (fs.existsSync(DB_FILE)) {
+    try {
+        users = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    } catch (e) {
+        console.log("Ошибка чтения БД, создаем новую");
+        users = {};
+    }
+}
+
+// Функция сохранения базы
+const saveDB = () => {
+    fs.writeFileSync(DB_FILE, JSON.stringify(users, null, 2));
+};
+
+// АДМИНКА (по адресу /api/admin/stats)
 app.get('/api/admin/stats', (req, res) => {
-    res.json({ 
-        total_players: Object.keys(users).length,
-        users: Object.values(users).map(u => ({ id: u.id, n: u.n, b: u.b, refs: u.refs?.length || 0 }))
+    const players = Object.values(users);
+    res.json({
+        total_players: players.length,
+        banned_users: players.filter(u => u.isBanned).map(u => ({id: u.id, name: u.n})),
+        top_balances: players.sort((a,b) => b.b - a.b).slice(0, 10).map(u => ({n: u.n, b: u.b}))
     });
 });
 
-app.all('/api/action', async (req, res) => {
-    const userId = req.method === 'GET' ? req.query.userId : req.body.userId;
-    const userName = req.method === 'POST' ? req.body.userName : 'Рыбак';
-    const refId = req.query.ref; // Для рефералки
-    
-    if (!userId) return res.status(400).json({ error: 'No userId' });
+app.post('/api/action', (req, res) => {
+    const { userId, userName, action, isDeep, captchaPassed, amount } = req.body;
+    if (!userId) return res.status(400).send('No ID');
 
+    // Инициализация нового юзера
     if (!users[userId]) {
         users[userId] = {
-            id: userId, n: userName, b: 100, energy: 50, fish: 0,
-            artifacts: [], boxes: 1, refs: [], lastBonus: 0, lastUpdate: Date.now()
+            id: userId, n: userName || 'Рыбак', b: 100, energy: 50, fish: 0,
+            artifacts: [], boxes: 1, lastBonus: 0, isBanned: false, failCount: 0, lastUpdate: Date.now()
         };
-        // Логика реферала
-        if (refId && users[refId] && refId !== userId) {
-            users[refId].refs.push(userId);
-            users[refId].boxes += 1; // Даем коробку за друга
-        }
+        saveDB();
     }
 
     const u = users[userId];
+
+    // Проверка на бан
+    if (u.isBanned) {
+        return res.json({ ...u, msg: "ДОСТУП ЗАКРЫТ: ВЫ ЗАБАНЕНЫ ЗА ИСПОЛЬЗОВАНИЕ БОТОВ!" });
+    }
+
     const now = Date.now();
 
     // Регенерация энергии
-    if (now - u.lastUpdate > 300000) {
-        u.energy = Math.min(100, u.energy + Math.floor((now - u.lastUpdate) / 300000));
+    if (now - u.lastUpdate > 300000) { 
+        const recovered = Math.floor((now - u.lastUpdate) / 300000);
+        u.energy = Math.min(100, u.energy + recovered);
         u.lastUpdate = now;
     }
 
-    if (req.method === 'POST') {
-        const { action, isDeep, wallet, amount, itemId } = req.body;
-
-        // ВЫВОД
-        if (action === 'withdraw') {
-            if (u.b < 30000) return res.json({ ...u, msg: 'Минимум 30,000 TC!' });
-            u.b -= amount;
-            return res.json({ ...u, msg: `Заявка на ${amount} TC создана! Ожидайте.` });
+    // ЛОГИКА ДЕЙСТВИЙ
+    if (action === 'catch_fish') {
+        // Проверка "подсечки" (защита от ботов)
+        if (!captchaPassed) {
+            u.failCount++;
+            if (u.failCount >= 3) {
+                u.isBanned = true;
+                saveDB();
+                return res.json({ ...u, msg: "ОБНАРУЖЕНО ИСПОЛЬЗОВАНИЕ СКРИПТОВ. ВЫ ЗАБАНЕНЫ!" });
+            }
+            return res.json({ ...u, msg: "РЫБА УШЛА! НУЖНО ПОДСЕКАТЬ (КЛИКАТЬ ПО РЫБЕ)!" });
         }
 
-        // МАГАЗИН (Заглушка Stars)
-        if (action === 'buy_item') {
-            return res.json({ ...u, msg: 'Оплата Stars временно через бота @admin' });
+        u.failCount = 0; // Сброс счетчика при успехе
+        const cost = isDeep ? 10 : 2;
+        if (u.energy < cost) return res.json({ ...u, msg: "НЕДОСТАТОЧНО ЭНЕРГИИ!" });
+
+        u.energy -= cost;
+        let weight = (Math.random() * 5 + 0.5) * (isDeep ? 10 : 1);
+        
+        // Золотой час (19:00)
+        const hour = new Date().getHours();
+        if (hour === 19) weight *= 2;
+
+        u.fish += weight;
+        
+        // Шанс на артефакт
+        if (Math.random() < 0.05) {
+            const artId = Math.floor(Math.random() * 5) + 1;
+            if (!u.artifacts.includes(artId)) {
+                u.artifacts.push(artId);
+                if (u.artifacts.length === 5) u.b += 30000;
+            }
         }
 
-        // ЕЖЕДНЕВНЫЙ БОНУС
-        if (action === 'get_bonus') {
-            if (now - u.lastBonus < 86400000) return res.json({ ...u, msg: 'Рано!' });
-            u.b += 50; u.lastBonus = now;
-            return res.json({ ...u, msg: 'Получено 50 TC!' });
-        }
-
-        // РЫБАЛКА
-        if (action === 'catch_fish') {
-            const cost = isDeep ? 10 : 2;
-            if (u.energy < cost) return res.json({ ...u, msg: 'Нет энергии!' });
-            u.energy -= cost;
-            const hour = new Date().getHours();
-            let mult = (hour === 19) ? 2 : 1;
-            if (isDeep) mult *= 10;
-
-            if (Math.random() < 0.001) { u.b += 5000; return res.json({ ...u, isGoldFish: true, msg: 'ЗОЛОТАЯ РЫБКА! +5000 TC!' }); }
-            if (isDeep && Math.random() < 0.3) return res.json({ ...u, msg: 'ОБРЫВ!' });
-
-            let weight = (Math.random() * 5 + 0.5) * mult;
-            u.fish += weight;
-            return res.json({ ...u, msg: `Улов: ${weight.toFixed(2)} кг!` });
-        }
-
-        if (action === 'sell_fish') {
-            let reward = u.fish * 0.5;
-            u.b += reward; u.fish = 0;
-            return res.json({ ...u, msg: `Продано за ${reward.toFixed(1)} TC` });
-        }
+        saveDB();
+        return res.json({ ...u, msg: `УДАЧНЫЙ ЗАБРОС! ВЫЛОВЛЕНО: ${weight.toFixed(2)} КГ.` });
     }
+
+    if (action === 'sell_fish') {
+        if (u.fish <= 0) return res.json({ ...u, msg: "САДОК ПУСТ!" });
+        const reward = u.fish * 0.5;
+        u.b += reward;
+        u.fish = 0;
+        saveDB();
+        return res.json({ ...u, msg: `РЫБА ПРОДАНА ЗА ${reward.toFixed(1)} TC!` });
+    }
+
+    if (action === 'get_bonus') {
+        if (now - u.lastBonus < 86400000) return res.json({ ...u, msg: "РАНО! БОНУС ЕЩЕ НЕ ГОТОВ." });
+        u.b += 50;
+        u.lastBonus = now;
+        saveDB();
+        return res.json({ ...u, msg: "ЕЖЕДНЕВНЫЙ БОНУС 50 TC ПОЛУЧЕН!" });
+    }
+
+    if (action === 'withdraw') {
+        if (u.b < 30000) return res.json({ ...u, msg: "МИНИМАЛЬНАЯ СУММА ВЫВОДА — 30,000 TC!" });
+        u.b -= amount;
+        saveDB();
+        return res.json({ ...u, msg: "ЗАЯВКА НА ВЫВОД ПРИНЯТА!" });
+    }
+
     res.json(u);
 });
 
-app.listen(process.env.PORT || 3000);
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
