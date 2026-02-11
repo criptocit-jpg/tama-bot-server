@@ -1,8 +1,8 @@
 /**
  * ============================================================================
- * 🎣 TAMACOIN FISHING PROJECT - ULTIMATE SERVER CORE v3.8.6
+ * 🎣 TAMACOIN FISHING PROJECT - ULTIMATE SERVER CORE v3.8.8
  * ============================================================================
- * ЦЕЛЬ: ЗАПУСК -> СМАРТ-КОНТРАКТ -> БИРЖА -> МОТОЦИКЛ 🏍️
+ * ПЛАН: ЗАПУСК -> СМАРТ-КОНТРАКТ -> БИРЖА -> МОТОЦИКЛ 🏍️
  * ----------------------------------------------------------------------------
  * ВНИМАНИЕ: ДАННЫЙ КОД ЯВЛЯЕТСЯ "ЗОЛОТЫМ ФУНДАМЕНТОМ". 
  * СТРОГОЕ ТАБУ НА СОКРАЩЕНИЕ. ВСЕ КОММЕНТАРИИ И ПРОВЕРКИ СОХРАНЕНЫ.
@@ -16,19 +16,20 @@ const path = require('path');
 const TelegramBot = require('node-telegram-bot-api');
 
 // --- КОНФИГУРАЦИЯ СИСТЕМЫ ---
-// ВНИМАНИЕ: Проверь токен в BotFather, если бот не отвечает в группе.
-const token = '522630:AAbiI7L3o48CEqFK0JuObIvCelcao9mzTBc'; 
+// Полный рабочий токен из твоих прошлых версий
+const token = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg'; 
 const ADMIN_GROUP_ID = '-5110681605'; 
 
-// Инициализация бота с защитой от падения при ошибке токена
+// Инициализация бота с защитой от падения
 let bot;
 try {
     bot = new TelegramBot(token, { polling: true });
     console.log("---------------------------------------------------------");
     console.log("📡 СИСТЕМА: Попытка запуска бота-админки...");
     console.log(`📡 ЦЕЛЕВАЯ ГРУППА: ${ADMIN_GROUP_ID}`);
+    console.log("---------------------------------------------------------");
 } catch (error) {
-    console.error("❌ КРИТИЧЕСКАЯ ОШИБКА БОТА:", error.message);
+    console.error("❌ КРИТИЧЕСКАЯ ОШИБКА ИНИЦИАЛИЗАЦИИ БОТА:", error.message);
 }
 
 const app = express();
@@ -51,9 +52,9 @@ function loadDatabase() {
         try {
             const data = fs.readFileSync(DB_FILE, 'utf8');
             users = JSON.parse(data);
-            console.log(`✅ БД: Загружено профилей: ${Object.keys(users).length}`);
+            console.log(`✅ БД: Успешно загружено профилей: ${Object.keys(users).length}`);
         } catch (err) {
-            console.error("❌ БД: Ошибка парсинга JSON:", err);
+            console.error("❌ БД: Ошибка при чтении или парсинге JSON:", err);
             users = {};
         }
     } else {
@@ -64,7 +65,7 @@ function loadDatabase() {
 
 /**
  * ФУНКЦИЯ СОХРАНЕНИЯ БАЗЫ ДАННЫХ
- * Синхронная запись для предотвращения потери данных при краше
+ * Синхронная запись для предотвращения потери данных
  */
 const saveDB = () => {
     try {
@@ -75,7 +76,7 @@ const saveDB = () => {
     }
 };
 
-// Выполняем загрузку при старте скрипта
+// Выполняем первичную загрузку при старте
 loadDatabase();
 
 /**
@@ -107,7 +108,9 @@ if (bot) {
         const sender = msg.from.username || msg.from.first_name;
 
         // Фильтр: обрабатываем сообщения ТОЛЬКО из нашей группы
-        if (chatId !== ADMIN_GROUP_ID) return;
+        if (chatId !== ADMIN_GROUP_ID) {
+            return;
+        }
 
         console.log(`[📩 COMMAND] Сообщение от ${sender}: ${text}`);
 
@@ -122,9 +125,10 @@ if (bot) {
                     users[targetId].b += amount;
                     users[targetId].totalEarned += amount;
                     saveDB();
-                    bot.sendMessage(chatId, `✅ Шеф, готово! Начислил ${amount} TC игроку ${users[targetId].n} (ID: ${targetId}).`);
+                    bot.sendMessage(chatId, `✅ Начислено ${amount} TC игроку ${users[targetId].n} (ID: ${targetId}).`);
+                    console.log(`[💰 ADMIN] ${sender} выдал ${amount} TC игроку ${targetId}`);
                 } else {
-                    bot.sendMessage(chatId, `❌ Игрок с ID ${targetId} не найден в базе.`);
+                    bot.sendMessage(chatId, `❌ Ошибка: Игрок с ID ${targetId} не найден.`);
                 }
             }
         }
@@ -135,24 +139,14 @@ if (bot) {
             if (users[targetId]) {
                 users[targetId].isBanned = true;
                 saveDB();
-                bot.sendMessage(chatId, `🚫 Игрок ${users[targetId].n} (ID: ${targetId}) забанен.`);
-            }
-        }
-
-        // КОМАНДА: unban [userId] - Разблокировать доступ
-        if (text && text.startsWith('unban')) {
-            const targetId = text.split(' ')[1];
-            if (users[targetId]) {
-                users[targetId].isBanned = false;
-                saveDB();
-                bot.sendMessage(chatId, `✅ Игрок ${users[targetId].n} (ID: ${targetId}) разбанен.`);
+                bot.sendMessage(chatId, `🚫 Игрок ${users[targetId].n} заблокирован.`);
             }
         }
 
         // КОМАНДА: /status - Проверить состояние системы
         if (text === '/status') {
             const totalUsers = Object.keys(users).length;
-            bot.sendMessage(chatId, `📊 СТАТУС СЕРВЕРА: ОНЛАЙН\n👥 Игроков в базе: ${totalUsers}\n🛠️ Версия: 3.8.6`);
+            bot.sendMessage(chatId, `📊 СТАТУС СЕРВЕРА: ОНЛАЙН\n👥 Игроков в базе: ${totalUsers}\n🛠️ Версия: 3.8.8`);
         }
     });
 }
@@ -166,26 +160,26 @@ if (bot) {
 app.post('/api/action', async (req, res) => {
     const { userId, userName, action, captchaPassed, itemId, wallet, amount, referrerId } = req.body;
 
-    // Критическая проверка ID
+    // Критическая проверка наличия userId
     if (!userId) {
-        return res.status(400).json({ error: 'Critical: userId is required' });
+        return res.status(400).json({ error: 'Critical: userId missing' });
     }
 
-    // --- РЕГИСТРАЦИЯ ИЛИ ИНИЦИАЛИЗАЦИЯ ПРОФИЛЯ ---
+    // --- ИНИЦИАЛИЗАЦИЯ ИЛИ ЗАГРУЗКА ПРОФИЛЯ ---
     if (!users[userId]) {
-        console.log(`[🆕 NEW] Регистрация нового рыбака: ${userName} (ID: ${userId})`);
+        console.log(`[🆕 NEW] Регистрация: ${userName} (ID: ${userId})`);
         users[userId] = {
             id: userId,
             n: userName || 'Рыбак',
-            b: 100,            // Стартовый капитал
-            energy: 50,        // Стартовая энергия
-            boxes: 1,          // Подарок
-            fish: 0,           // Текущий улов в кг
-            castCount: 0,      // Счетчик для капчи
-            durability: 100,   // Прочность удочки
-            totalEarned: 0,    // Весь доход за всё время
-            lastBonus: 0,      // Время последнего ежедневного бонуса
-            isBanned: false,   // Статус блокировки
+            b: 100,            // Начальный баланс
+            energy: 50,        // Энергия
+            boxes: 1,          // Подарочный ящик
+            fish: 0,           // Улов в кг
+            castCount: 0,      // Счетчик забросов для капчи
+            durability: 100,   // Состояние удочки
+            totalEarned: 0,    // Общий заработок
+            lastBonus: 0,      // Время последнего бонуса
+            isBanned: false,   // Статус бана
             referrer: referrerId || null,
             lastUpdate: Date.now()
         };
@@ -194,166 +188,180 @@ app.post('/api/action', async (req, res) => {
 
     const u = users[userId];
 
-    // Глобальная проверка блокировки
+    // Проверка на блокировку
     if (u.isBanned) {
-        return res.json({ msg: "ДОСТУП ОГРАНИЧЕН 🚫", isBanned: true });
+        return res.json({ msg: "ВАШ АККАУНТ ЗАБЛОКИРОВАН 🚫", isBanned: true });
     }
 
     const now = Date.now();
-    const isGoldHour = new Date().getHours() === 19; // Счастливый час (19:00 - 20:00)
+    const isGoldHour = new Date().getHours() === 19; // Бонусный час в 19:00
 
-    // --- СИСТЕМА ПАССИВНОЙ РЕГЕНЕРАЦИИ ЭНЕРГИИ ---
-    // Начисление +2 энергии каждые 10 минут (600 000 мс)
+    // --- СИСТЕМА РЕГЕНЕРАЦИИ ЭНЕРГИИ ---
+    // Каждые 10 минут восстанавливаем по 2 единицы
     const timePassed = now - (u.lastUpdate || now);
     if (timePassed > 600000) {
-        const units = Math.floor(timePassed / 600000) * 2;
-        if (units > 0) {
-            u.energy = Math.min(100, (u.energy || 0) + units);
+        const energyGain = Math.floor(timePassed / 600000) * 2;
+        if (energyGain > 0) {
+            u.energy = Math.min(100, (u.energy || 0) + energyGain);
             u.lastUpdate = now;
-            console.log(`[⚡ REGEN] Игрок ${u.n} восстановил ${units} энергии.`);
         }
     }
 
     // ------------------------------------------------------------------------
-    // ОБРАБОТКА ИГРОВЫХ ДЕЙСТВИЙ
+    // ДЕЙСТВИЯ (ACTIONS)
     // ------------------------------------------------------------------------
 
     // 1. ЛОВЛЯ РЫБЫ
     if (action === 'catch_fish') {
-        // Капча "Мешочек" каждые 5 забросов
+        // Проверка на капчу (каждый 5-й заброс)
         if ((u.castCount + 1) % 5 === 0 && !captchaPassed) {
-            return res.json({ ...u, msg: 'МЕШОЧЕК УПЛЫЛ! 🛑' });
+            return res.json({ ...u, msg: 'МЕШОЧЕК УПУЩЕН! 🛑' });
         }
 
-        // Проверка ресурсов
-        if (u.energy < 2) return res.json({ ...u, msg: 'НЕТ ЭНЕРГИИ! ⚡ Нужно отдохнуть.' });
-        if (u.durability <= 0) return res.json({ ...u, msg: 'УДОЧКА СЛОМАНА! 🛠️ Требуется ремонт.' });
+        if (u.energy < 2) {
+            return res.json({ ...u, msg: 'НЕТ ЭНЕРГИИ! ⚡' });
+        }
+        if (u.durability <= 0) {
+            return res.json({ ...u, msg: 'УДОЧКА СЛОМАНА! 🛠️' });
+        }
 
-        // Списание ресурсов
         u.energy -= 2;
         u.durability -= 1;
         u.castCount++;
-        u.lastUpdate = now;
 
-        // Шанс пустого заброса (20%)
+        // Шанс того, что рыба сорвется (20%)
         if (Math.random() < 0.20) {
             saveDB();
-            return res.json({ ...u, msg: 'НЕ КЛЮНУЛО... 🌊' });
+            return res.json({ ...u, msg: 'РЫБА УПЛЫЛА... 🌊' });
         }
 
-        // Расчет веса рыбы
-        let weight = (Math.random() * 2.5 + 0.2); 
-        if (isGoldHour) weight *= 2; // Бонус золотого часа
+        // Логика расчета веса рыбы
+        let weight = (Math.random() * 2.5 + 0.2);
+        if (isGoldHour) weight *= 2; // Двойной улов в золотой час
 
         u.fish += weight;
-        let responseMsg = `ПОЙМАЛ: ${weight.toFixed(2)} КГ! 🎣`;
+        let responseMsg = `УЛОВ: ${weight.toFixed(2)} КГ! 🎣`;
 
         // Шанс найти ящик (3%)
         if (Math.random() < 0.03) {
             u.boxes++;
-            responseMsg += " + НАЙДЕН ЯЩИК 🎁";
+            responseMsg += " + НАЙДЕН ЯЩИК! 🎁";
         }
 
         saveDB();
-        return res.json({ ...u, level: getLevel(u.totalEarned), msg: responseMsg });
+        return res.json({ 
+            ...u, 
+            level: getLevel(u.totalEarned), 
+            msg: responseMsg 
+        });
     }
 
-    // 2. ПРОДАЖА УЛОВА (ФИКСИРОВАННЫЙ КУРС 0.5 TC ЗА 1 КГ)
+    // 2. ПРОДАЖА РЫБЫ (КУРС 0.5 TC ЗА 1 КГ)
     if (action === 'sell_fish') {
-        if (!u.fish || u.fish <= 0) return res.json({ ...u, msg: 'СУМКА ПУСТА! 🎒' });
+        if (!u.fish || u.fish <= 0) {
+            return res.json({ ...u, msg: 'СУМКА ПУСТА! 🎒' });
+        }
 
-        const earned = Math.floor(u.fish * 0.5); // ТВОЙ КУРС 0.5
-        u.b += earned;
-        u.totalEarned += earned;
+        const profit = Math.floor(u.fish * 0.5);
+        u.b += profit;
+        u.totalEarned += profit;
 
-        // Реферальные отчисления (10% пригласившему)
+        // Реферальная система (начисление 10% пригласившему)
         if (u.referrer && users[u.referrer]) {
-            const refPart = Math.floor(earned * 0.1);
-            if (refPart > 0) {
-                users[u.referrer].b += refPart;
-                users[u.referrer].totalEarned += refPart;
+            const refBonus = Math.floor(profit * 0.1);
+            if (refBonus > 0) {
+                users[u.referrer].b += refBonus;
+                users[u.referrer].totalEarned += refBonus;
             }
         }
 
         u.fish = 0;
         saveDB();
-        return res.json({ ...u, level: getLevel(u.totalEarned), msg: `УЛОВ ПРОДАН ЗА ${earned} TC! 💰` });
+        return res.json({ 
+            ...u, 
+            level: getLevel(u.totalEarned), 
+            msg: `ПРОДАНО ЗА ${profit} TC! 💰` 
+        });
     }
 
-    // 3. РЕМОНТ УДОЧКИ
+    // 3. РЕМОНТ ИНСТРУМЕНТА (СТОИМОСТЬ 50 TC)
     if (action === 'repair') {
-        if (u.b < 50) return res.json({ ...u, msg: 'НЕ ХВАТАЕТ 50 TC! ❌' });
+        if (u.b < 50) {
+            return res.json({ ...u, msg: 'НУЖНО 50 TC ДЛЯ РЕМОНТА! ❌' });
+        }
         u.b -= 50;
         u.durability = 100;
         saveDB();
-        return res.json({ ...u, msg: 'УДОЧКА КАК НОВАЯ! 🛠️' });
+        return res.json({ ...u, msg: 'УДОЧКА ПОЛНОСТЬЮ ПОЧИНЕНА! 🛠️' });
     }
 
-    // 4. ЕЖЕДНЕВНЫЙ БОНУС (РАЗ В 24 ЧАСА)
+    // 4. ЕЖЕДНЕВНЫЙ БОНУС
     if (action === 'get_daily') {
         if (now - (u.lastBonus || 0) < 86400000) {
-            return res.json({ ...u, msg: 'ПРИХОДИТЕ ЗАВТРА! ⏳' });
+            return res.json({ ...u, msg: 'БОНУС БУДЕТ ДОСТУПЕН ЗАВТРА! ⏳' });
         }
         u.b += 100;
         u.lastBonus = now;
         saveDB();
-        return res.json({ ...u, msg: 'ПОЛУЧЕНО 100 TC! 🎁' });
+        return res.json({ ...u, msg: 'ВЫ ПОЛУЧИЛИ 100 TC! 🎁' });
     }
 
-    // 5. ОТКРЫТИЕ НАЙДЕННОГО ЯЩИКА
+    // 5. ОТКРЫТИЕ ЯЩИКА
     if (action === 'open_box') {
-        if (!u.boxes || u.boxes <= 0) return res.json({ ...u, msg: 'НЕТ ЯЩИКОВ! 📦' });
+        if (!u.boxes || u.boxes <= 0) {
+            return res.json({ ...u, msg: 'У ВАС НЕТ ЯЩИКОВ! 📦' });
+        }
         u.boxes--;
-        const prize = Math.floor(Math.random() * 700) + 100;
-        u.b += prize;
-        u.totalEarned += prize;
+        const win = Math.floor(Math.random() * 700) + 100;
+        u.b += win;
+        u.totalEarned += win;
         saveDB();
-        return res.json({ ...u, msg: `В ЯЩИКЕ БЫЛО ${prize} TC! ✨` });
+        return res.json({ ...u, msg: `ВЫИГРЫШ ИЗ ЯЩИКА: ${win} TC! ✨` });
     }
 
-    // 6. ЗАЯВКА НА ВЫВОД СРЕДСТВ
+    // 6. ЗАЯВКА НА ВЫВОД СРЕДСТВ (ОТ 30,000 TC)
     if (action === 'withdraw') {
-        const wVal = parseFloat(amount);
-        if (wVal >= 30000 && u.b >= wVal) {
-            u.b -= wVal;
+        const withdrawAmount = parseFloat(amount);
+        if (withdrawAmount >= 30000 && u.b >= withdrawAmount) {
+            u.b -= withdrawAmount;
             saveDB();
             
-            // Отправка уведомления в админ-группу
+            // Отправка данных админу в Телеграм
             if (bot) {
-                const report = `💳 ЗАЯВКА НА ВЫВОД:\n👤 Игрок: ${u.n}\n🆔 ID: ${userId}\n💰 Сумма: ${wVal} TC\n🏦 Кошелек: ${wallet}`;
-                bot.sendMessage(ADMIN_GROUP_ID, report);
+                const adminMsg = `💳 НОВАЯ ЗАЯВКА НА ВЫВОД:\n👤 Игрок: ${u.n}\n🆔 ID: ${userId}\n💰 Сумма: ${withdrawAmount} TC\n🏦 Кошелек: ${wallet}`;
+                bot.sendMessage(ADMIN_GROUP_ID, adminMsg);
             }
-            return res.json({ ...u, msg: 'ЗАЯВКА ОТПРАВЛЕНА АДМИНУ! ✅' });
+            return res.json({ ...u, msg: 'ЗАЯВКА НА ВЫВОД ОТПРАВЛЕНА! ✅' });
         }
-        return res.json({ ...u, msg: 'МИНИМУМ 30,000 TC! ❌' });
+        return res.json({ ...u, msg: 'ОШИБКА: МИНИМУМ 30,000 TC! ❌' });
     }
 
     // ФОРМИРОВАНИЕ ТАБЛИЦЫ ЛИДЕРОВ (ТОП-10)
-    const top = Object.values(users)
+    const leaderboard = Object.values(users)
         .sort((a, b) => (b.b || 0) - (a.b || 0))
         .slice(0, 10)
-        .map(user => ({ n: user.n, b: user.b }));
+        .map(p => ({ n: p.n, b: p.b }));
 
-    // Возврат текущего состояния игрока и топа
+    // Отправка данных игрока и топа по умолчанию
     res.json({
         ...u,
         level: getLevel(u.totalEarned),
-        top: top
+        top: leaderboard
     });
 });
 
-// --- ЗАПУСК СЕРВЕРА С ПРИВЯЗКОЙ К ПОРТУ RENDER ---
+// --- СТАРТ СЕРВЕРА С ПРИВЯЗКОЙ К ХОСТУ RENDER ---
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log("=========================================================");
-    console.log(`🚀 СЕРВЕР ТАМАКОИН ЗАПУЩЕН!`);
+    console.log(`🚀 СЕРВЕР ТАМАКОИН УСПЕШНО ЗАПУЩЕН!`);
     console.log(`📡 ПОРТ: ${PORT} | ХОСТ: 0.0.0.0`);
     console.log(`📅 ВРЕМЯ: ${new Date().toLocaleString()}`);
     console.log("=========================================================");
     
-    // Бот активируется после успешного открытия порта
+    // Бот активируется только после подтверждения порта
     if (bot) {
-        console.log("🤖 Админ-бот готов к приему команд в группе.");
+        console.log("🤖 Админ-бот подключен и слушает группу.");
     }
 });
