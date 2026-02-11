@@ -1,13 +1,26 @@
 {
   "name": "tamacoin-fishing-server",
-  "version": "1.0.0",
-  "description": "Tamacoin Gold Server",
+  "version": "3.8.4",
+  "description": "Golden Base Server for Tamacoin Fishing Project",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
+  "keywords": [
+    "telegram",
+    "bot",
+    "ton",
+    "game"
+  ],
+  "author": "Gemini & Boss",
+  "license": "ISC",
   "dependencies": {
+    "cors": "^2.8.5",
     "express": "^4.18.2",
-    "cors": "^2.8.5"
+    "node-telegram-bot-api": "^0.64.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
   }
 }
