@@ -7,140 +7,139 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ПУТЬ К БАЗЕ ДАННЫХ (чтобы ничего не пропадало)
 const DB_FILE = path.join(__dirname, 'database.json');
 let users = {};
 
-// 1. ЗАГРУЗКА БАЗЫ ПРИ ЗАПУСКЕ
+// ЗАГРУЗКА БД
 if (fs.existsSync(DB_FILE)) {
     try {
         users = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-        console.log("БД загружена. Игроков в базе:", Object.keys(users).length);
-    } catch (e) { 
-        console.log("Ошибка БД, создаем новую");
-        users = {}; 
-    }
+    } catch (e) { users = {}; }
 }
 
-// 2. ФУНКЦИЯ СОХРАНЕНИЯ (Вызывать после каждого изменения!)
-const saveDB = () => {
-    fs.writeFileSync(DB_FILE, JSON.stringify(users, null, 4));
+const saveDB = () => fs.writeFileSync(DB_FILE, JSON.stringify(users, null, 4));
+
+// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+const getLevel = (total) => {
+    if (total > 500000) return "ПОСЕЙДОН 🔱";
+    if (total > 100000) return "МОРСКОЙ ВОЛК 🐺";
+    if (total > 50000) return "КАПИТАН 👨‍✈️";
+    if (total > 10000) return "РЫБОЛОВ-ПРО 🎣";
+    if (total > 3000) return "ЛЮБИТЕЛЬ 🐡";
+    return "САЛАГА 🌱";
 };
 
-const API_ACTION = '/api/action';
+// АДМИН-ПАНЕЛЬ (РЕЖИМ БОГА)
+app.post('/api/admin/power', (req, res) => {
+    const { adminKey, targetId, action, value } = req.body;
+    if (adminKey !== 'твой_секретный_ключ_777') return res.status(403).json({ error: 'Access Denied' });
 
-app.get('/', (req, res) => res.send('Tamacoin API 3.5.8 Active'));
+    const u = users[targetId];
+    if (!u) return res.status(404).json({ error: 'User not found' });
 
-app.all(API_ACTION, async (req, res) => {
+    if (action === 'give_money') u.b += parseFloat(value);
+    if (action === 'ban') u.isBanned = true;
+    if (action === 'unban') u.isBanned = false;
+    
+    saveDB();
+    res.json({ success: true, user: u });
+});
+
+app.all('/api/action', async (req, res) => {
     const userId = req.method === 'GET' ? req.query.userId : req.body.userId;
     const userName = req.method === 'POST' ? req.body.userName : 'Рыбак';
     
     if (!userId) return res.status(400).json({ error: 'No userId' });
 
-    // Инициализация пользователя
     if (!users[userId]) {
         users[userId] = {
-            id: userId,
-            n: userName,
-            b: 100,      // Баланс
-            energy: 50,  // Энергия
-            boxes: 1,    // Ящики
-            fish: 0,     // Вес
-            castCount: 0, // Счетчик забросов для капчи
-            lastUpdate: Date.now()
+            id: userId, n: userName, b: 100, energy: 50, boxes: 1, fish: 0,
+            castCount: 0, durability: 100, totalEarned: 0, 
+            lastBonus: 0, isBanned: false, lastUpdate: Date.now()
         };
         saveDB();
     }
 
     const u = users[userId];
+    if (u.isBanned) return res.json({ msg: "ВЫ ЗАБАНЕНЫ ЗА ПОДОЗРИТЕЛЬНУЮ АКТИВНОСТЬ! 🚫" });
 
-    // Регенерация энергии (раз в 10 минут +1)
     const now = Date.now();
-    if (now - u.lastUpdate > 600000) {
-        u.energy = Math.min(100, u.energy + 1);
-        u.lastUpdate = now;
-        saveDB();
-    }
+    const isGoldHour = new Date().getHours() === 19; // Золотой час в 19:00
 
     if (req.method === 'POST') {
-        const { action, wallet, amount, id: itemId, captchaPassed } = req.body;
+        const { action, captchaPassed, itemId } = req.body;
 
-        // --- ЛОГИКА РЫБАЛКИ ---
         if (action === 'catch_fish') {
-            // Проверка на капчу (каждый 5-й раз)
-            const isCaptchaStep = (u.castCount + 1) % 5 === 0;
-            if (isCaptchaStep && !captchaPassed) {
-                return res.json({ ...u, msg: 'Рыба сорвалась! Не нажал мешочек 🛑' });
+            const isCaptcha = (u.castCount + 1) % 5 === 0;
+            if (isCaptcha && !captchaPassed) return res.json({ ...u, msg: 'МЕШОЧЕК УПЛЫЛ! 🛑' });
+            if (u.energy < 2) return res.json({ ...u, msg: 'Нет энергии! ⚡' });
+            if (u.durability <= 0) return res.json({ ...u, msg: 'УДОЧКА СЛОМАНА! НУЖЕН РЕМОНТ! 🛠️' });
+
+            u.energy -= 2;
+            u.durability -= 1; // Износ удочки
+            u.castCount++;
+
+            // Шанс обрыва лески (5%)
+            if (Math.random() < 0.05) {
+                u.durability -= 5;
+                return res.json({ ...u, msg: 'ЛЕКА ОБОРВАЛАСЬ! МИНУС ПРОЧНОСТЬ! 💥' });
             }
 
-            if (u.energy <= 0) return res.json({ ...u, msg: 'Нет энергии! ⚡' });
+            let weight = (Math.random() * 5 + 0.5);
+            if (isGoldHour) weight *= 2; // Х2 в золотой час
+
+            u.fish += weight;
             
-            u.energy -= 2;
-            u.castCount = (u.castCount || 0) + 1;
-            
-            let weight = (Math.random() * 5 + 0.5); 
-            u.fish = (u.fish || 0) + weight;
-            
-            let responseMsg = `Поймал рыбу: ${weight.toFixed(2)} кг! 🎣`;
-            
-            // Шанс на ящик 10%
-            if (Math.random() < 0.1) {
-                u.boxes += 1;
-                responseMsg = `Поймал ${weight.toFixed(2)}кг и нашел ЯЩИК! 🎁`;
-            }
-            
+            // Уменьшил шанс ящика до 3% (чтобы не было слишком много)
+            let boxFound = false;
+            if (Math.random() < 0.03) { u.boxes++; boxFound = true; }
+
             saveDB();
-            return res.json({ ...u, msg: responseMsg });
+            return res.json({ 
+                ...u, 
+                level: getLevel(u.totalEarned),
+                msg: boxFound ? `РЫБА: ${weight.toFixed(2)}кг + ЯЩИК! 🎁` : `РЫБА: ${weight.toFixed(2)}кг 🎣`,
+                isGold: isGoldHour
+            });
         }
 
-        // --- ПРОДАЖА ---
         if (action === 'sell_fish') {
-            if (!u.fish || u.fish <= 0) return res.json({ ...u, msg: 'Рыбы нет на продажу' });
-            let money = u.fish * 10; 
+            if (u.fish <= 0) return res.json({ ...u, msg: 'Садок пуст' });
+            let money = u.fish * 10;
             u.b += money;
+            u.totalEarned += money;
             u.fish = 0;
             saveDB();
-            return res.json({ ...u, msg: `Продано! Получено ${money.toFixed(0)} TC 💰` });
+            return res.json({ ...u, level: getLevel(u.totalEarned), msg: `ПРОДАНО НА ${money.toFixed(0)} TC!` });
         }
 
-        // --- ЯЩИКИ ---
-        if (action === 'open_box') {
-            if (u.boxes <= 0) return res.json({ ...u, msg: 'Ящиков нет' });
-            u.boxes -= 1;
-            let prize = Math.floor(Math.random() * 5000) + 100;
-            u.b += prize;
+        if (action === 'get_daily') {
+            if (now - u.lastBonus < 86400000) return res.json({ ...u, msg: 'БОНУС ЕЩЕ НЕ ГОТОВ!' });
+            u.b += 100;
+            u.lastBonus = now;
             saveDB();
-            return res.json({ ...u, msg: `В ящике было ${prize} TC! ✨` });
+            return res.json({ ...u, msg: 'ЕЖЕДНЕВНЫЙ БОНУС 100 TC ПОЛУЧЕН! 💰' });
         }
 
-        // --- МАГАЗИН STARS ---
-        if (action === 'buy_stars') {
-            if (itemId === 'energy_pack') { 
-                u.energy += 30; 
-                saveDB();
-                return res.json({ ...u, msg: '+30 Энергии куплено!' }); 
-            }
-            return res.json({ ...u, msg: 'Тестовый режим Stars' });
-        }
-
-        // --- ВЫВОД ---
-        if (action === 'withdraw') {
-            if (u.b < 30000) return res.json({ ...u, msg: 'Минимум 30,000 TC!' });
-            if (amount > u.b) return res.json({ ...u, msg: 'Недостаточно средств!' });
-            u.b -= amount;
+        if (action === 'repair') {
+            if (u.b < 50) return res.json({ ...u, msg: 'Нужно 50 TC для ремонта!' });
+            u.b -= 50; u.durability = 100;
             saveDB();
-            return res.json({ ...u, msg: 'Заявка принята! Ожидайте выплату 💳' });
+            return res.json({ ...u, msg: 'УДОЧКА КАК НОВАЯ! 🛠️' });
+        }
+        
+        // РЕАЛЬНЫЕ ПОКУПКИ
+        if (action === 'buy_item') {
+            const prices = { 'energy': 30, 'titan': 150 };
+            if (u.b < prices[itemId]) return res.json({ ...u, msg: 'НЕ ХВАТАЕТ TC!' });
+            u.b -= prices[itemId];
+            if (itemId === 'energy') u.energy += 30;
+            saveDB();
+            return res.json({ ...u, msg: 'ПОКУПКА УСПЕШНА!' });
         }
     }
 
-    // ТОП 10
-    const top = Object.values(users)
-        .sort((a, b) => (b.b || 0) - (a.b || 0))
-        .slice(0, 10)
-        .map(user => ({ n: user.n, b: user.b }));
-
-    res.json({ ...u, top });
+    res.json({ ...u, level: getLevel(u.totalEarned || 0), isGold: isGoldHour });
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server Tamacoin Gold 3.5.8 on port ${PORT}`));
+app.listen(3000);
