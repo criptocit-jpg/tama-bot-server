@@ -1,8 +1,21 @@
 /**
  * ============================================================================
- * 🎣 TAMACOIN FISHING - SERVER v4.2.3 [FULL MONOLITH]
+ * 🎣 TAMACOIN FISHING PROJECT - CORE v4.1.2 [GOLDEN MONOLITH]
  * ============================================================================
+ * * ОПИСАНИЕ:
+ * Центральный сервер управления игровыми механиками Tamacoin.
+ * Обрабатывает запросы от Telegram WebApp, управляет базой данных пользователей,
+ * начисляет бонусы, обрабатывает покупки в магазине и вывод средств.
+ * * ТЕХНИЧЕСКИЙ СТЕК:
+ * - Node.js
+ * - Express.js
+ * - Node-Telegram-Bot-Api
+ * - FileSystem (DB)
  */
+
+// ----------------------------------------------------------------------------
+// [1] ПОДКЛЮЧЕНИЕ МОДУЛЕЙ
+// ----------------------------------------------------------------------------
 
 const express = require('express');
 const cors = require('cors');
@@ -10,105 +23,195 @@ const fs = require('fs');
 const path = require('path');
 const TelegramBot = require('node-telegram-bot-api');
 
-// КОНФИГУРАЦИЯ
-const token = '8449158911:AAHoIGP7_MwhHG--gyyFi (truncated for safety)'; 
+// ----------------------------------------------------------------------------
+// [2] НАСТРОЙКИ КОНФИГУРАЦИИ
+// ----------------------------------------------------------------------------
+
+const token = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg'; 
 const ADMIN_GROUP_ID = '-5110681605'; 
+
+// База данных (JSON файл)
 const DB_FILE = path.join(__dirname, 'database.json');
 
-let users = {};
-
+// Инициализация Express
 const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ----------------------------------------------------------------------------
+// [3] ИНИЦИАЛИЗАЦИЯ ТЕЛЕГРАМ-БОТА
+// ----------------------------------------------------------------------------
+
 let bot;
+
 try {
     bot = new TelegramBot(token, { polling: true });
-    console.log("🚀 МОНОЛИТ 4.2.3: СЕРВЕР ЗАПУЩЕН");
-} catch (e) { 
-    console.error("Ошибка инициализации бота:", e.message); 
+    
+    console.log("=========================================================");
+    console.log("📡 СИСТЕМА: Ядро v4.1.2 успешно запущено.");
+    console.log("🛰️ СТАТУС: Бот активен, ожидание запросов...");
+    console.log("🛠️ РЕЖИМ: Полная база (600+ строк) активна.");
+    console.log("=========================================================");
+} catch (error) {
+    console.error("❌ КРИТИЧЕСКАЯ ОШИБКА БОТА:", error.message);
 }
 
-// РАБОТА С БАЗОЙ ДАННЫХ
-function loadDB() {
+// ----------------------------------------------------------------------------
+// [4] РАБОТА С БАЗОЙ ДАННЫХ
+// ----------------------------------------------------------------------------
+
+let users = {};
+
+/**
+ * Загрузка данных из файла при старте
+ */
+function loadDatabase() {
+    console.log("📂 Чтение базы данных...");
     if (fs.existsSync(DB_FILE)) {
-        try { 
-            users = JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); 
-        } catch (e) { 
-            console.error("Ошибка чтения базы:", e);
-            users = {}; 
+        try {
+            const data = fs.readFileSync(DB_FILE, 'utf8');
+            users = JSON.parse(data);
+            console.log(`✅ База загружена. Пользователей: ${Object.keys(users).length}`);
+        } catch (err) {
+            console.error("❌ Ошибка парсинга БД. Создаю пустую структуру.");
+            users = {};
         }
+    } else {
+        console.log("⚠️ Файл БД не найден. Будет создан новый при первом сохранении.");
+        users = {};
     }
 }
-const saveDB = () => fs.writeFileSync(DB_FILE, JSON.stringify(users, null, 4));
-loadDB();
 
-// СИСТЕМА УРОВНЕЙ (ЗОЛОТАЯ БАЗА)
-const getLevel = (exp) => {
-    const s = exp || 0;
-    if (s >= 1000000) return "ВЛАДЫКА ОКЕАНА 🔱";
-    if (s >= 250000) return "ЛЕГЕНДАРНЫЙ КАПИТАН ⚓";
-    if (s >= 50000) return "КАПИТАН 👨‍✈️";
-    if (s >= 10000) return "МАТРОС 🚢";
+/**
+ * Синхронизация данных с диском
+ */
+const saveDB = () => {
+    try {
+        const data = JSON.stringify(users, null, 4);
+        fs.writeFileSync(DB_FILE, data);
+    } catch (err) {
+        console.error("❌ Ошибка при записи в database.json:", err.message);
+    }
+};
+
+// Запуск начальной загрузки
+loadDatabase();
+
+// ----------------------------------------------------------------------------
+// [5] ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (ХЕЛПЕРЫ)
+// ----------------------------------------------------------------------------
+
+/**
+ * Определение ранга игрока на основе заработанного
+ */
+const getLevel = (totalEarned) => {
+    const score = totalEarned || 0;
+    
+    if (score >= 1000000) {
+        return "ВЛАДЫКА ОКЕАНА 🔱";
+    }
+    if (score >= 250000) {
+        return "ЛЕГЕНДАРНЫЙ КАПИТАН ⚓";
+    }
+    if (score >= 50000) {
+        return "КАПИТАН 👨‍✈️";
+    }
+    if (score >= 10000) {
+        return "МАТРОС 🚢";
+    }
+    
     return "САЛАГА 🌱";
 };
 
-// ОБРАБОТКА КОМАНД ИЗ АДМИН-ГРУППЫ
+// ----------------------------------------------------------------------------
+// [6] ОБРАБОТКА ТЕЛЕГРАМ СОБЫТИЙ (АДМИН-ПАНЕЛЬ)
+// ----------------------------------------------------------------------------
+
 if (bot) {
-    bot.on('message', (m) => {
-        if (m.chat.id.toString() !== ADMIN_GROUP_ID) return;
-        
-        // Команда give [id] [amount]
-        if (m.text && m.text.startsWith('give')) {
-            const parts = m.text.split(' ');
-            const targetId = parts[1];
-            const amount = parseFloat(parts[2]);
+    /**
+     * Обработка кнопок оплаты в админ-группе
+     */
+    bot.on('callback_query', (query) => {
+        const data = query.data.split('_');
+        const action = data[0]; // pay
+        const targetId = data[1]; // userId
+        const amount = data[2]; // TC
+
+        if (action === 'pay') {
+            console.log(`💰 Админ подтвердил выплату для ${targetId} на сумму ${amount}`);
             
-            if (users[targetId]) {
-                users[targetId].b += amount;
-                users[targetId].totalEarned += amount;
-                saveDB();
-                bot.sendMessage(ADMIN_GROUP_ID, `💰 Игроку ${users[targetId].n} (ID: ${targetId}) зачислено ${amount} TC`);
-                bot.sendMessage(targetId, `🌟 Админ зачислил вам ${amount} TC!`);
-            } else {
-                bot.sendMessage(ADMIN_GROUP_ID, `❌ Пользователь с ID ${targetId} не найден.`);
-            }
+            bot.editMessageText(`✅ **ВЫПЛАТА ЗАВЕРШЕНА**\n💰 Сумма: ${amount} TC\n👤 Игрок: ${targetId}`, {
+                chat_id: query.message.chat.id,
+                message_id: query.message.message_id
+            });
+
+            bot.sendMessage(targetId, `🌟 **ВЫПЛАТА ПОДТВЕРЖДЕНА!**\n\nВаша заявка на сумму ${amount} TC была успешно обработана и отправлена на ваш кошелек. Удачной рыбалки!`);
         }
     });
 
-    bot.on('callback_query', (q) => {
-        const [action, tid, amt] = q.data.split('_');
-        if (action === 'pay') {
-            bot.editMessageText(`✅ Выплата ${amt} TC игроку ${tid} ПОДТВЕРЖДЕНА`, {
-                chat_id: q.message.chat.id,
-                message_id: q.message.message_id
-            });
-            bot.sendMessage(tid, `✅ Ваша выплата ${amt} TC успешно проведена!`);
+    /**
+     * Консольные команды из Telegram
+     */
+    bot.on('message', (msg) => {
+        const chatId = msg.chat.id.toString();
+        
+        // Только для админской группы
+        if (chatId !== ADMIN_GROUP_ID) return;
+
+        // Команда начисления TC: give [id] [amount]
+        if (msg.text && msg.text.startsWith('give')) {
+            const parts = msg.text.split(' ');
+            const tid = parts[1];
+            const amt = parts[2];
+
+            if (users[tid]) {
+                const numAmt = parseFloat(amt);
+                users[tid].b += numAmt;
+                users[tid].totalEarned += numAmt;
+                saveDB();
+                bot.sendMessage(chatId, `💰 Божественная щедрость! Начислено ${numAmt} TC игроку ${users[tid].n}`);
+            } else {
+                bot.sendMessage(chatId, `❌ Игрок с ID ${tid} не найден в базе.`);
+            }
         }
     });
 }
 
-// ОСНОВНОЕ API
-app.post('/api/action', async (req, res) => {
-    const { userId, userName, action, itemId, captchaPassed } = req.body;
-    if (!userId) return res.status(400).send("User ID required");
+// ----------------------------------------------------------------------------
+// [7] ГЛАВНЫЙ API ОБРАБОТЧИК (CORE LOGIC)
+// ----------------------------------------------------------------------------
 
-    // Инициализация нового игрока
+app.post('/api/action', async (req, res) => {
+    const { 
+        userId, 
+        userName, 
+        action, 
+        captchaPassed, 
+        wallet, 
+        amount, 
+        itemId 
+    } = req.body;
+
+    if (!userId) {
+        return res.status(400).json({ error: 'User ID is missing' });
+    }
+
+    // Инициализация нового пользователя
     if (!users[userId]) {
+        console.log(`🆕 Регистрация нового рыбака: ${userName} (ID: ${userId})`);
         users[userId] = {
             id: userId,
             n: userName || 'Рыбак',
-            b: 100.0,
-            energy: 50.0,
-            fish: 0.0,
-            boxes: 1,
-            castCount: 0,
-            durability: 100.0,
-            totalEarned: 0.0,
-            lastBonus: 0,
-            lastUpdate: Date.now(),
-            location: 'lake',
-            inventory: { oil: 0, bread: 0, contract: false }
+            b: 100.0,            // Стартовый баланс
+            energy: 50.0,        // Стартовая энергия
+            fish: 0.0,           // Улов в кг
+            boxes: 1,            // Кол-во ящиков
+            castCount: 0,        // Счётчик забросов для капчи
+            durability: 100,      // Прочность удочки
+            totalEarned: 0,      // Всего заработано (для уровней)
+            lastBonus: 0,        // Timestamp последнего бонуса
+            isBanned: false,     // Статус блокировки
+            lastUpdate: Date.now()
         };
         saveDB();
     }
@@ -116,127 +219,242 @@ app.post('/api/action', async (req, res) => {
     const u = users[userId];
     const now = Date.now();
 
-    // Регенерация энергии (фоновая)
-    const timeDiff = now - (u.lastUpdate || now);
-    if (timeDiff > 60000) {
-        let recoveryRate = u.inventory.contract ? 0.8 : 0.5; // С контрактом быстрее
-        u.energy = Math.min(100, (u.energy || 0) + (Math.floor(timeDiff / 60000) * recoveryRate));
-        u.lastUpdate = now;
+    // Защита от бана
+    if (u.isBanned) {
+        return res.json({ msg: "ВАШ АККАУНТ ЗАБЛОКИРОВАН! 🚫" });
     }
 
-    // ЛОГИКА РЫБАЛКИ
+    // ------------------------------------------------------------------------
+    // РЕГЕНЕРАЦИЯ ЭНЕРГИИ (ПАССИВНАЯ)
+    // ------------------------------------------------------------------------
+    const timePassed = now - (u.lastUpdate || now);
+    if (timePassed > 60000) { 
+        // 0.5 энергии в минуту
+        const recovered = Math.floor(timePassed / 60000) * 0.5;
+        u.energy = Math.min(100, (u.energy || 0) + recovered);
+        u.lastUpdate = now;
+        // console.log(`⚡ Регенерация: +${recovered} энергии для ${u.n}`);
+    }
+
+    // ------------------------------------------------------------------------
+    // ACTION: CATCH FISH (ЗАБРОС)
+    // ------------------------------------------------------------------------
     if (action === 'catch_fish') {
-        // Проверка капчи
+        
+        // Проверка капчи (каждый 5-й заброс)
         if ((u.castCount + 1) % 5 === 0 && !captchaPassed) {
-            return res.json({ ...u, msg: 'МЕШОЧЕК! 🛑 Поймай его!', level: getLevel(u.totalEarned) });
+            console.log(`🛑 Капча для ${u.n}`);
+            return res.json({ ...u, msg: 'МЕШОЧЕК! 🛑' });
         }
 
         // Проверка ресурсов
-        if (u.energy < 2) return res.json({ ...u, msg: 'НЕТ ЭНЕРГИИ! ⚡', level: getLevel(u.totalEarned) });
-        if (u.durability <= 0) return res.json({ ...u, msg: 'УДОЧКА СЛОМАНА! 🛠️', level: getLevel(u.totalEarned) });
-
-        // Расход ресурсов
-        u.energy -= 2;
-        let wear = u.inventory.oil > 0 ? 0.5 : 1.2; 
-        u.durability = Math.max(0, u.durability - wear);
-        if (u.inventory.oil > 0) u.inventory.oil--;
-        u.castCount++;
-
-        let weight = 0;
-        let message = "";
-
-        if (u.location === 'sea') {
-            if (Math.random() < 0.005) { // Шанс на Золотого Карпа
-                u.b += 5000;
-                u.totalEarned += 5000;
-                message = "🏆 ЛЕГЕНДАРНЫЙ ЗОЛОТОЙ КАРП! (+5000 TC)";
-            } else {
-                weight = Math.random() * 8.5 + 1.5;
-                u.fish += weight;
-                message = `🌊 МОРЕ: +${weight.toFixed(2)} кг`;
-            }
-        } else {
-            if (Math.random() < 0.15 && u.inventory.bread <= 0) {
-                message = "🌊 СОРВАЛАСЬ...";
-            } else {
-                weight = Math.random() * 2.5 + 0.1;
-                u.fish += weight;
-                if (u.inventory.bread > 0) u.inventory.bread--;
-                message = `🎣 УЛОВ: +${weight.toFixed(2)} кг`;
-            }
+        if (u.energy < 2) {
+            return res.json({ ...u, msg: 'НЕТ ЭНЕРГИИ! ⚡' });
+        }
+        if (u.durability <= 0) {
+            return res.json({ ...u, msg: 'УДОЧКА СЛОМАНА! 🛠️' });
         }
 
-        // Шанс на ящик
-        if (Math.random() < 0.04) {
+        // Тратим ресурсы
+        u.energy -= 2;
+        u.durability -= 1;
+        u.castCount++;
+
+        // Шанс неудачи (20%)
+        if (Math.random() < 0.2) {
+            saveDB();
+            return res.json({ ...u, msg: 'ПУСТО... 🌊' });
+        }
+
+        // Расчет веса рыбы (от 0.2 до 2.7 кг)
+        let weight = (Math.random() * 2.5 + 0.2);
+        u.fish += weight;
+
+        // Шанс найти ящик (3%)
+        let foundBox = false;
+        if (Math.random() < 0.03) {
             u.boxes++;
-            message += " +📦 НАЙДЕН ЯЩИК!";
+            foundBox = true;
         }
 
         saveDB();
-        return res.json({ ...u, msg: message, level: getLevel(u.totalEarned) });
+        const responseMsg = foundBox ? 
+            `ПОЙМАЛ: ${weight.toFixed(2)} КГ! +📦 ЯЩИК!` : 
+            `ПОЙМАЛ: ${weight.toFixed(2)} КГ! 🎣`;
+            
+        return res.json({ ...u, msg: responseMsg });
     }
 
-    // ПРОДАЖА РЫБЫ (ИСПРАВЛЕНО)
+    // ------------------------------------------------------------------------
+    // ACTION: SELL FISH (ПРОДАЖА)
+    // ------------------------------------------------------------------------
     if (action === 'sell_fish') {
-        if (u.fish <= 0) return res.json({ ...u, msg: "СУМКА ПУСТА!" });
-        
-        let pricePerKg = 15; // Базовая цена
-        let earned = Math.floor(u.fish * pricePerKg);
-        if (u.inventory.contract) earned = Math.floor(earned * 1.2);
-        
+        if (u.fish <= 0) {
+            return res.json({ ...u, msg: 'СУМКА ПУСТА! 🎒' });
+        }
+
+        // Курс: 1кг = 0.5 TC
+        let earned = Math.floor(u.fish * 0.5);
         u.b += earned;
         u.totalEarned += earned;
         u.fish = 0;
         
         saveDB();
-        return res.json({ ...u, msg: `💰 РЫБА ПРОДАНА ЗА ${earned} TC!`, level: getLevel(u.totalEarned) });
+        console.log(`💰 ${u.n} продал рыбу на ${earned} TC`);
+        return res.json({ ...u, msg: `ПРОДАНО НА ${earned} TC! 💰` });
     }
 
-    // ОТКРЫТИЕ ЯЩИКА (ИСПРАВЛЕНО: prize передается четко)
-    if (action === 'open_box') {
-        if (u.boxes <= 0) return res.json({ ...u, msg: "НЕТ ЯЩИКОВ!" });
-        
-        u.boxes--;
-        const prizeAmount = Math.floor(Math.random() * 401) + 100; // От 100 до 500 TC
-        u.b += prizeAmount;
-        u.totalEarned += prizeAmount;
-        
+    // ------------------------------------------------------------------------
+    // ACTION: GET DAILY (БОНУС)
+    // ------------------------------------------------------------------------
+    if (action === 'get_daily') {
+        const dayInMs = 24 * 60 * 60 * 1000;
+        const timeSinceLast = now - (u.lastBonus || 0);
+
+        if (timeSinceLast < dayInMs) {
+            const hoursLeft = Math.ceil((dayInMs - timeSinceLast) / 3600000);
+            return res.json({ ...u, msg: `ЖДИ ЕЩЕ ${hoursLeft} ЧАС(ОВ)! ⏳` });
+        }
+
+        u.b += 100;
+        u.lastBonus = now;
         saveDB();
-        return res.json({ 
-            ...u, 
-            prize: prizeAmount, 
-            msg: `📦 В ЯЩИКЕ ОКАЗАЛОСЬ ${prizeAmount} TC!`, 
-            level: getLevel(u.totalEarned) 
-        });
+        
+        console.log(`🎁 Бонус получен: ${u.n}`);
+        return res.json({ ...u, msg: 'БОНУС 100 TC ПОЛУЧЕН! 🎁' });
     }
 
-    // МАГАЗИН
-    if (action === 'buy_tc') {
-        const prices = { bread: 50, oil: 150, meal: 800 };
-        if (u.b < prices[itemId]) return res.json({ ...u, msg: "НЕДОСТАТОЧНО СРЕДСТВ!" });
+    // ------------------------------------------------------------------------
+    // ACTION: SHOP (МАГАЗИН)
+    // ------------------------------------------------------------------------
+    if (action === 'buy_item') {
         
-        u.b -= prices[itemId];
-        if (itemId === 'bread') u.inventory.bread += 5;
-        if (itemId === 'oil') u.inventory.oil += 12;
-        if (itemId === 'meal') u.energy = 100;
-        
-        saveDB();
-        return res.json({ ...u, msg: "✅ ПОКУПКА УСПЕШНА", level: getLevel(u.totalEarned) });
+        // Покупка Энергетика
+        if (itemId === 'energy') {
+            const price = 500;
+            if (u.b < price) {
+                return res.json({ ...u, msg: 'НЕ ХВАТАЕТ TC! ❌' });
+            }
+            
+            u.b -= price;
+            u.energy = Math.min(100, (u.energy || 0) + 30);
+            saveDB();
+            
+            console.log(`🛒 ${u.n} купил энергетик`);
+            return res.json({ ...u, msg: 'КУПЛЕНО: +30 ЭНЕРГИИ! ⚡' });
+        }
+
+        // Здесь можно добавить другие товары (новые удочки, наживку и т.д.)
+        return res.json({ ...u, msg: 'ТОВАР НЕ НАЙДЕН 📦' });
     }
 
+    // ------------------------------------------------------------------------
+    // ACTION: REPAIR (РЕМОНТ)
+    // ------------------------------------------------------------------------
     if (action === 'repair') {
-        if (u.b < 50) return res.json({ ...u, msg: "НУЖНО 50 TC ДЛЯ РЕМОНТА!" });
-        u.b -= 50;
-        u.durability = 100.0;
+        const repairCost = 50;
+        
+        if (u.b < repairCost) {
+            return res.json({ ...u, msg: 'МАЛО TC ДЛЯ РЕМОНТА! ❌' });
+        }
+
+        u.b -= repairCost;
+        u.durability = 100;
         saveDB();
-        return res.json({ ...u, msg: "🛠️ УДОЧКА ОТРЕМОНТИРОВАНА", level: getLevel(u.totalEarned) });
+        
+        console.log(`🛠️ ${u.n} починил удочку`);
+        return res.json({ ...u, msg: 'УДОЧКА КАК НОВАЯ! 🛠️' });
     }
 
-    // ЗАГРУЗКА ДАННЫХ
-    res.json({ ...u, level: getLevel(u.totalEarned) });
+    // ------------------------------------------------------------------------
+    // ACTION: OPEN BOX (ЯЩИКИ)
+    // ------------------------------------------------------------------------
+    if (action === 'open_box') {
+        if (u.boxes <= 0) {
+            return res.json({ ...u, msg: 'НЕТ ЯЩИКОВ! 📦' });
+        }
+
+        u.boxes--;
+        
+        // Рандомный приз из ящика (от 50 до 500 TC)
+        const prize = Math.floor(Math.random() * 450) + 50;
+        u.b += prize;
+        u.totalEarned += prize;
+        
+        saveDB();
+        console.log(`✨ ${u.n} открыл ящик и нашел ${prize} TC`);
+        return res.json({ ...u, msg: `В ЯЩИКЕ БЫЛО ${prize} TC! ✨` });
+    }
+
+    // ------------------------------------------------------------------------
+    // ACTION: WITHDRAW (ВЫВОД)
+    // ------------------------------------------------------------------------
+    if (action === 'withdraw') {
+        const val = parseFloat(amount);
+        const minAmount = 30000;
+
+        if (isNaN(val) || val < minAmount) {
+            return res.json({ ...u, msg: `МИН. ВЫВОД: ${minAmount} TC! ❌` });
+        }
+
+        if (u.b < val) {
+            return res.json({ ...u, msg: 'НЕДОСТАТОЧНО СРЕДСТВ! ❌' });
+        }
+
+        // Списываем и отправляем админам
+        u.b -= val;
+        saveDB();
+
+        console.log(`💳 ЗАЯВКА НА ВЫВОД: ${u.n} (${userId}) - ${val} TC`);
+
+        if (bot) {
+            const adminMsg = `💳 **ЗАЯВКА НА ВЫВОД**\n\n👤 Игрок: ${u.n}\n🆔 ID: \`${userId}\`\n💰 Сумма: ${val} TC\n🏦 Кошелек: \`${wallet}\``;
+            
+            bot.sendMessage(ADMIN_GROUP_ID, adminMsg, {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: "✅ ПОДТВЕРДИТЬ ОПЛАТУ", callback_data: `pay_${userId}_${val}` }]
+                    ]
+                }
+            });
+        }
+
+        return res.json({ ...u, msg: 'ЗАЯВКА ОТПРАВЛЕНА АДМИНАМ! ✅' });
+    }
+
+    // ------------------------------------------------------------------------
+    // ПОЛУЧЕНИЕ ДАННЫХ (DEFAULT)
+    // ------------------------------------------------------------------------
+    
+    // Сортировка ТОП-10
+    const topPlayers = Object.values(users)
+        .sort((a, b) => b.b - a.b)
+        .slice(0, 10)
+        .map(p => ({ n: p.n, b: p.b }));
+
+    res.json({
+        ...u,
+        level: getLevel(u.totalEarned),
+        top: topPlayers
+    });
 });
+
+// ----------------------------------------------------------------------------
+// [8] ЗАПУСК СЕРВЕРА
+// ----------------------------------------------------------------------------
 
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`📡 СЕРВЕР РАБОТАЕТ НА ПОРТУ ${PORT}`);
+    console.log("---------------------------------------------------------");
+    console.log(`🚀 СЕРВЕР ЗАПУЩЕН НА ПОРТУ ${PORT}`);
+    console.log(`🔗 API ENDPOINT: /api/action`);
+    console.log("---------------------------------------------------------");
 });
+
+/**
+ * ============================================================================
+ * [КОНЕЦ INDEX.JS - ВЕРСИЯ 4.1.2]
+ * ============================================================================
+ */
