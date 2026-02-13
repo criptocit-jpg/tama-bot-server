@@ -208,11 +208,18 @@ app.post('/api/action', async (req, res) => {
             fish: 0.0,           // Улов в кг
             boxes: 1,            // Кол-во ящиков
             castCount: 0,        // Счётчик забросов для капчи
-            durability: 100,      // Прочность удочки
+            durability: 100,     // Прочность удочки
             totalEarned: 0,      // Всего заработано (для уровней)
             lastBonus: 0,        // Timestamp последнего бонуса
             isBanned: false,     // Статус блокировки
-            lastUpdate: Date.now()
+            lastUpdate: Date.now(),
+            goldenCarps: 0,      // Золотые карпы
+            goldCarpChance: 0.003, // Шанс золотого карпа (0.3%)
+            hasGoldenLake: false, // Доступ к озеру надежды
+            goldenRodActive: false, // Активна ли золотая удочка
+            goldenRodExpiry: 0, // Когда истекает золотая удочка
+            safeFish: 0,          // Мяч для предотвращения срывов
+            safeFishCount: 0      // Количество оставшихся срывов
         };
         saveDB();
     }
@@ -252,14 +259,23 @@ app.post('/api/action', async (req, res) => {
         if (u.energy < 2) {
             return res.json({ ...u, msg: 'НЕТ ЭНЕРГИИ! ⚡' });
         }
-        if (u.durability <= 0) {
+        if (u.durability <= 0 && !u.goldenRodActive) {
             return res.json({ ...u, msg: 'УДОЧКА СЛОМАНА! 🛠️' });
         }
 
         // Тратим ресурсы
         u.energy -= 2;
-        u.durability -= 1;
+        if (!u.goldenRodActive) {
+            u.durability -= 1;
+        }
         u.castCount++;
+
+        // Проверяем наличие безопасного мяча
+        if (u.safeFishCount > 0) {
+            u.safeFishCount--;
+            saveDB();
+            return res.json({ ...u, msg: 'ПОЙМАЛ: 1 КГ! (БЕЗ СРЫВА) 🎣' });
+        }
 
         // Шанс неудачи (20%)
         if (Math.random() < 0.2) {
@@ -269,6 +285,15 @@ app.post('/api/action', async (req, res) => {
 
         // Расчет веса рыбы (от 0.2 до 2.7 кг)
         let weight = (Math.random() * 2.5 + 0.2);
+        
+        // Проверяем шанс золотого карпа
+        let isGoldenCarp = false;
+        if (u.hasGoldenLake && Math.random() < u.goldCarpChance) {
+            isGoldenCarp = true;
+            weight = 10.0; // Золотой карп всегда 10 кг
+            u.goldenCarps++;
+        }
+        
         u.fish += weight;
 
         // Шанс найти ящик (3%)
@@ -279,7 +304,9 @@ app.post('/api/action', async (req, res) => {
         }
 
         saveDB();
-        const responseMsg = foundBox ? 
+        const responseMsg = isGoldenCarp ? 
+            `ПОЙМАЛ: ${weight.toFixed(2)} КГ! 🐟 ЗОЛОТОЙ КАРП! 💰` :
+            foundBox ? 
             `ПОЙМАЛ: ${weight.toFixed(2)} КГ! +📦 ЯЩИК!` : 
             `ПОЙМАЛ: ${weight.toFixed(2)} КГ! 🎣`;
             
@@ -294,8 +321,8 @@ app.post('/api/action', async (req, res) => {
             return res.json({ ...u, msg: 'СУМКА ПУСТА! 🎒' });
         }
 
-        // Курс: 1кг = 0.5 TC
-        let earned = Math.floor(u.fish * 0.5);
+        // Курс: 1кг = 2 TC (изменено!)
+        let earned = Math.floor(u.fish * 2);
         u.b += earned;
         u.totalEarned += earned;
         u.fish = 0;
@@ -330,9 +357,41 @@ app.post('/api/action', async (req, res) => {
     // ------------------------------------------------------------------------
     if (action === 'buy_item') {
         
-        // Покупка Энергетика
-        if (itemId === 'energy') {
-            const price = 500;
+        // Покупка Мячика (50 TC)
+        if (itemId === 'safe_ball') {
+            const price = 50;
+            if (u.b < price) {
+                return res.json({ ...u, msg: 'НЕ ХВАТАЕТ TC! ❌' });
+            }
+            
+            u.b -= price;
+            u.safeFish += 1;
+            u.safeFishCount = 10; // 10 забросов без срывов
+            saveDB();
+            
+            console.log(`🛒 ${u.n} купил мячик`);
+            return res.json({ ...u, msg: 'КУПЛЕНО: МЯЧИК! 🎾 (10 забросов)' });
+        }
+
+        // Покупка Комплекта Снастей (150 TC)
+        if (itemId === 'fishing_kit') {
+            const price = 150;
+            if (u.b < price) {
+                return res.json({ ...u, msg: 'НЕ ХВАТАЕТ TC! ❌' });
+            }
+            
+            u.b -= price;
+            // Уменьшает шанс ломаться на 50%
+            // Можно реализовать в коде обработки урона
+            saveDB();
+            
+            console.log(`🛒 ${u.n} купил комплект снастей`);
+            return res.json({ ...u, msg: 'КУПЛЕНО: КОМПЛЕКТ СНАСТЕЙ! 🎯' });
+        }
+
+        // Покупка Энергетика (100 TC)
+        if (itemId === 'energy_drink') {
+            const price = 100;
             if (u.b < price) {
                 return res.json({ ...u, msg: 'НЕ ХВАТАЕТ TC! ❌' });
             }
@@ -342,10 +401,10 @@ app.post('/api/action', async (req, res) => {
             saveDB();
             
             console.log(`🛒 ${u.n} купил энергетик`);
-            return res.json({ ...u, msg: 'КУПЛЕНО: +30 ЭНЕРГИИ! ⚡' });
+            return res.json({ ...u, msg: 'КУПЛЕНО: ЭНЕРГЕТИК! ⚡' });
         }
 
-        // Покупка Золотой Удочки
+        // Покупка Золотой Удочки (5000 TC)
         if (itemId === 'golden_rod') {
             const price = 5000;
             if (u.b < price) {
@@ -360,50 +419,69 @@ app.post('/api/action', async (req, res) => {
             return res.json({ ...u, msg: 'КУПЛЕНО: ЗОЛОТАЯ УДОЧКА! ⚡' });
         }
 
-        // Покупка Буста Улова
-        if (itemId === 'catch_boost') {
-            const price = 2000;
+        // Покупка Золотого Карпа (5000 TC)
+        if (itemId === 'golden_carp') {
+            const price = 5000;
             if (u.b < price) {
                 return res.json({ ...u, msg: 'НЕ ХВАТАЕТ TC! ❌' });
             }
             
             u.b -= price;
-            u.fish += 2.0;
+            u.goldenCarps++;
             saveDB();
             
-            console.log(`🛒 ${u.n} купил Буст Улова`);
-            return res.json({ ...u, msg: 'КУПЛЕНО: +2.0 КГ УЛОВА! 🎣' });
+            console.log(`🛒 ${u.n} купил Золотого Карпа`);
+            return res.json({ ...u, msg: 'КУПЛЕН: ЗОЛОТОЙ КАРП! 🐟' });
         }
 
-        // Покупка Супер Ящика
-        if (itemId === 'super_box') {
-            const price = 3000;
-            if (u.b < price) {
-                return res.json({ ...u, msg: 'НЕ ХВАТАЕТ TC! ❌' });
+        // Покупка Озера Надежды (150 Stars)
+        if (itemId === 'golden_lake') {
+            const price = 150;
+            if (u.s < price) {
+                return res.json({ ...u, msg: 'НЕ ХВАТАЕТ STARS! ❌' });
             }
             
-            u.b -= price;
-            u.boxes += 5;
+            u.s -= price;
+            u.hasGoldenLake = true;
+            u.goldCarpChance = 0.01; // Увеличиваем шанс до 1%
             saveDB();
             
-            console.log(`🛒 ${u.n} купил Супер Ящик`);
-            return res.json({ ...u, msg: 'КУПЛЕНО: +5 ЯЩИКОВ! 📦' });
+            console.log(`🛒 ${u.n} купил Озеро Надежды`);
+            return res.json({ ...u, msg: 'КУПЛЕНО: ОЗЕРО НАДЕЖДЫ! 🌊' });
         }
 
-        // Покупка Спец Наживки
-        if (itemId === 'special_bait') {
-            const price = 1000;
-            if (u.b < price) {
-                return res.json({ ...u, msg: 'НЕ ХВАТАЕТ TC! ❌' });
+        // Покупка Титановой Удочки (200 Stars)
+        if (itemId === 'titan_rod') {
+            const price = 200;
+            if (u.s < price) {
+                return res.json({ ...u, msg: 'НЕ ХВАТАЕТ STARS! ❌' });
             }
             
-            u.b -= price;
-            u.energy = Math.min(100, u.energy + 20);
-            u.durability = Math.min(100, u.durability + 20);
+            u.s -= price;
+            u.goldenRodActive = true;
+            u.goldenRodExpiry = now + (7 * 24 * 60 * 60 * 1000); // 7 дней
             saveDB();
             
-            console.log(`🛒 ${u.n} купил Спец Наживку`);
-            return res.json({ ...u, msg: 'КУПЛЕНО: СПЕЦ-НАЖИВКА! 🎣' });
+            console.log(`🛒 ${u.n} купил Титановую Удочку`);
+            return res.json({ ...u, msg: 'КУПЛЕНА: ТИТАНОВАЯ УДОЧКА! 🛡️' });
+        }
+
+        // Покупка Набора Профи (500 Stars)
+        if (itemId === 'pro_set') {
+            const price = 500;
+            if (u.s < price) {
+                return res.json({ ...u, msg: 'НЕ ХВАТАЕТ STARS! ❌' });
+            }
+            
+            u.s -= price;
+            u.hasGoldenLake = true;
+            u.goldCarpChance = 0.01; // Увеличиваем шанс до 1%
+            u.goldenRodActive = true;
+            u.goldenRodExpiry = now + (30 * 24 * 60 * 60 * 1000); // 30 дней
+            saveDB();
+            
+            console.log(`🛒 ${u.n} купил Набор Профи`);
+            return res.json({ ...u, msg: 'КУПЛЕН: НАБОР ПРОФИ! 💎' });
         }
 
         // Покупка Золотого Рыболова
@@ -420,7 +498,7 @@ app.post('/api/action', async (req, res) => {
             saveDB();
             
             console.log(`🛒 ${u.n} купил Золотого Рыболова`);
-            return res.json({ ...u, msg: 'КУПЛЕНО: ЗОЛОТОЙ РЫБОЛОВ! 🐟' });
+            return res.json({ ...u, msg: 'КУПЛЕН: ЗОЛОТОЙ РЫБОЛОВ! 🐟' });
         }
 
         // Покупка Буста Золотого Часа
@@ -435,7 +513,22 @@ app.post('/api/action', async (req, res) => {
             saveDB();
             
             console.log(`🛒 ${u.n} купил Буст Золотого Часа`);
-            return res.json({ ...u, msg: 'КУПЛЕНО: +40 ЭНЕРГИИ! ⚡' });
+            return res.json({ ...u, msg: 'КУПЛЕН: +40 ЭНЕРГИИ! ⚡' });
+        }
+
+        // Покупка Супер Ящика
+        if (itemId === 'super_box') {
+            const price = 3000;
+            if (u.b < price) {
+                return res.json({ ...u, msg: 'НЕ ХВАТАЕТ TC! ❌' });
+            }
+            
+            u.b -= price;
+            u.boxes += 5;
+            saveDB();
+            
+            console.log(`🛒 ${u.n} купил Супер Ящик`);
+            return res.json({ ...u, msg: 'КУПЛЕН: +5 ЯЩИКОВ! 📦' });
         }
 
         // Покупка Специальных Звезд (Stars) - магазин Stars
@@ -450,7 +543,7 @@ app.post('/api/action', async (req, res) => {
             saveDB();
             
             console.log(`🛒 ${u.n} купил 100 Stars за 100 Stars`);
-            return res.json({ ...u, msg: 'КУПЛЕНО: +2000 TC! ✨' });
+            return res.json({ ...u, msg: 'КУПЛЕН: +2000 TC! ✨' });
         }
 
         // Покупка Супер Троянского Коня
@@ -466,7 +559,23 @@ app.post('/api/action', async (req, res) => {
             saveDB();
             
             console.log(`🛒 ${u.n} купил Троянского Коня`);
-            return res.json({ ...u, msg: 'КУПЛЕНО: СУПЕР КОНЬ! 🐴' });
+            return res.json({ ...u, msg: 'КУПЛЕН: СУПЕР КОНЬ! 🐴' });
+        }
+
+        // Покупка Специальной Наживки
+        if (itemId === 'special_bait') {
+            const price = 1000;
+            if (u.b < price) {
+                return res.json({ ...u, msg: 'НЕ ХВАТАЕТ TC! ❌' });
+            }
+            
+            u.b -= price;
+            u.energy = Math.min(100, u.energy + 20);
+            u.durability = Math.min(100, u.durability + 20);
+            saveDB();
+            
+            console.log(`🛒 ${u.n} купил Специальную Наживку`);
+            return res.json({ ...u, msg: 'КУПЛЕНА: СПЕЦ-НАЖИВКА! 🎣' });
         }
 
         // Зачем тут вообще этот товар? :)
