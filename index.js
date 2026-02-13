@@ -227,6 +227,20 @@ app.post('/api/action', async (req, res) => {
     const u = users[userId];
     const now = Date.now();
 
+        // --- ВОТ ЭТОТ БЛОК ВСТАВЛЯЕМ СЮДА ---
+    if (action === 'load_data') {
+        const topPlayers = Object.values(users)
+            .sort((a, b) => b.b - a.b)
+            .slice(0, 10)
+            .map(p => ({ n: p.n, b: p.b }));
+
+        return res.json({
+            ...u,
+            level: getLevel(u.totalEarned),
+            top: topPlayers
+        });
+    }
+
     // Защита от бана
     if (u.isBanned) {
         return res.json({ msg: "ВАШ АККАУНТ ЗАБЛОКИРОВАН! 🚫" });
@@ -657,3 +671,4 @@ app.listen(PORT, '0.0.0.0', () => {
  * ============================================================================
  */
 ```
+
