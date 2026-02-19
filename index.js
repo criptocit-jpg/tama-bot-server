@@ -11,8 +11,8 @@ const PORT = process.env.PORT || 3000;
 const DATA_FILE = './users.json';
 
 // --- НАСТРОЙКИ (ВСТАВЬ СВОИ ДАННЫЕ) ---
-const BOT_TOKEN = 'ТВОЙ_ТОКЕН'; 
-const ADMIN_CHAT_ID = 'ТВОЙ_АЙДИ'; 
+const BOT_TOKEN = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg'; 
+const ADMIN_CHAT_ID = '-5110681605'; 
 
 let users = {};
 let logs = ["Сервер Tamacoin запущен!"];
@@ -153,3 +153,4 @@ app.post('/api/action', async (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`Server running on ${PORT}`));
+
