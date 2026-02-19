@@ -12,7 +12,7 @@ const DATA_FILE = './users.json';
 
 // --- НАСТРОЙКИ ---
 const BOT_TOKEN = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg'; // Вставь свой токен
-const ADMIN_CHAT_ID = '-1005110681605'; // Твой ID с исправленным префиксом
+const ADMIN_CHAT_ID = '7883085758'; // Твой ID с исправленным префиксом
 
 let users = {};
 let logs = ["Сервер Tamacoin запущен!"];
@@ -146,3 +146,4 @@ app.post('/api/action', async (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`Server running on ${PORT}`));
+
