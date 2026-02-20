@@ -11,12 +11,12 @@ const PORT = process.env.PORT || 3000;
 const DATA_FILE = './users.json';
 
 // --- НАСТРОЙКИ ---
-const BOT_TOKEN = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg'; 
+const BOT_TOKEN = '8053883928:AAEyg0jnUZaHFVFnrEJH_C86A3caz6P0gu0'; 
 const ADMIN_CHAT_ID = '7883085758'; 
 const WITHDRAW_LIMIT = 30000;
 
 let users = {};
-let logs = ["Система Tamacoin запущена! Ждем первых уловов."];
+let logs = ["Система готова. Удачной рыбалки!"];
 
 function loadData() {
     if (fs.existsSync(DATA_FILE)) {
@@ -31,38 +31,26 @@ function addLog(m) {
     if (logs.length > 15) logs.pop();
 }
 
-// --- ОБРАБОТКА КОМАНД И КНОПОК ИЗ ТЕЛЕГРАМ ---
+// --- ОБРАБОТКА WEBHOOK ---
 app.post('/tg-webhook', async (req, res) => {
     const { callback_query } = req.body;
     if (callback_query) {
         const [action, tid, val] = callback_query.data.split('_');
-        const target = users[tid];
-
-        if (!target) return res.sendStatus(200);
-
-        if (action === 'paid') {
-            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, { chat_id: tid, text: `✅ Выплата ${val} TC подтверждена!` });
-        }
-
-        if (action === 'ban') {
-            target.isBanned = true;
+        if (action === 'givev' && users[tid]) {
+            if (val === 'license') users[tid].buffs.license = true;
+            if (val === 'echo') users[tid].buffs.echo = 100;
             saveData();
-            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`, { callback_query_id: callback_query.id, text: "Игрок забанен" });
+            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, { chat_id: tid, text: `🎉 Покупка ${val} активирована!` });
         }
-
-        if (action === 'givev') {
-            if (val === 'license') target.buffs.license = true;
-            if (val === 'echo') target.buffs.echo = 100;
+        if (action === 'ban' && users[tid]) {
+            users[tid].isBanned = true;
             saveData();
-            addLog(`🌟 ${target.n} активировал ${val}!`);
-            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, { chat_id: tid, text: `🎉 Покупка активирована! Предмет "${val}" теперь у вас.` });
-            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/answerCallbackQuery`, { callback_query_id: callback_query.id, text: "Предмет выдан!" });
         }
     }
     res.sendStatus(200);
 });
 
-// --- ГЛАВНАЯ ЛОГИКА ---
+// --- API ---
 app.post('/api/action', async (req, res) => {
     const { userId, userName, action, payload } = req.body;
     const now = Date.now();
@@ -78,68 +66,63 @@ app.post('/api/action', async (req, res) => {
     const u = users[userId];
     if (u.isBanned) return res.json({ msg: "ВЫ ЗАБАНЕНЫ", isBanned: true });
 
+    // Регенерация энергии
+    const passed = Math.floor((now - u.lastUpdate) / 60000);
+    if (passed > 0) {
+        u.energy = Math.min(100, u.energy + passed);
+        u.lastUpdate = now;
+    }
+
     let msg = "";
     let catchData = null;
 
     switch (action) {
         case 'load': break;
 
+        case 'get_top':
+            const top = Object.values(users)
+                .sort((a, b) => b.b - a.b)
+                .slice(0, 10)
+                .map(p => ({ n: p.n, b: Math.floor(p.b) }));
+            return res.json({ top });
+
         case 'get_daily':
-            if (now - u.lastBonus < 86400000) { msg = "Бонус будет завтра!"; }
-            else { u.b += 100; u.energy = 100; u.lastBonus = now; msg = "+100 TC!"; addLog(`${u.n} взял бонус`); }
+            if (now - u.lastBonus < 86400000) msg = "Заходите завтра!";
+            else { u.b += 100; u.energy = 100; u.lastBonus = now; msg = "Бонус получен!"; }
             break;
 
         case 'cast':
             if (u.energy < 2) { msg = "Нет энергии!"; break; }
-            if (u.dur <= 0) { msg = "Почини удочку!"; break; }
             u.energy -= 2; u.dur -= 1;
+            const isLake = payload.location === 'hope_lake';
+            if (isLake && !u.buffs.license) { msg = "Нужна лицензия!"; break; }
             
-            let isLake = payload.location === 'hope_lake';
-            let rnd = Math.random() * 100;
-
-            if (isLake && u.buffs.license) {
-                if (rnd < 1) { u.b += 5000; catchData = { type: "🌟 ЗОЛОТОЙ КАРП", w: "5000 TC" }; addLog(`🔥 ${u.n} поймал КАРПА!`); }
-                else { let w = (Math.random() * 6 + 2).toFixed(2); u.fish += parseFloat(w); catchData = { type: "Озерная рыба", w: w }; }
-            } else {
-                let w = (Math.random() * 2 + 0.1).toFixed(2); u.fish += parseFloat(w); catchData = { type: "Рыба", w: w };
-            }
+            let weight = (isLake ? (Math.random() * 5 + 2) : (Math.random() * 2 + 0.1)).toFixed(2);
+            u.fish += parseFloat(weight);
+            catchData = { type: isLake ? "Озерная рыба" : "Морская рыба", w: weight + " кг" };
             break;
 
         case 'sell':
-            let m = Math.floor(u.fish * 2.5); u.b += m; u.fish = 0; msg = `Получено ${m} TC`;
+            const sum = Math.floor(u.fish * 2.5);
+            u.b += sum; u.fish = 0; msg = `Продано за ${sum} TC`;
             break;
 
         case 'request_buy':
-            const item = payload.id;
-            const prices = { license: "1 TON", echo: "0.5 TON" };
             await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
                 chat_id: ADMIN_CHAT_ID,
-                text: `💎 <b>ЗАПРОС ПОКУПКИ</b>\n\nИгрок: ${u.n} (<code>${u.id}</code>)\nТовар: ${item}\nЦена: ${prices[item]}`,
-                parse_mode: 'HTML',
-                reply_markup: { inline_keyboard: [[{text:"✅ Выдать", callback_data:`givev_${u.id}_${item}`}, {text:"❌ Отклонить", callback_data:`rej` }]] }
+                text: `🛒 ПОКУПКА: ${u.n} (${u.id})\nТовар: ${payload.id}`,
+                reply_markup: { inline_keyboard: [[{text:"Выдать", callback_data:`givev_${u.id}_${payload.id}`}]] }
             });
-            msg = "Запрос отправлен! Ожидайте активации после оплаты.";
+            msg = "Запрос отправлен админу!";
             break;
 
-        case 'buy_tc': // Покупки за игровые монеты
-            if (payload.id === 'repair' && u.b >= 50) { u.b -= 50; u.dur = 100; msg = "Удочка как новая!"; }
-            else if (payload.id === 'energy' && u.b >= 50) { u.b -= 50; u.energy = 100; msg = "Энергия полна!"; }
-            else { msg = "Недостаточно TC!"; }
-            break;
-
-        case 'withdraw':
-            if (u.b < payload.sum || payload.sum < WITHDRAW_LIMIT) { msg = "Ошибка суммы!"; break; }
-            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-                chat_id: ADMIN_CHAT_ID,
-                text: `💰 <b>ВЫВОД</b>\nИгрок: ${u.n}\nСумма: ${payload.sum}\nКошелек: ${payload.wallet}`,
-                parse_mode: 'HTML',
-                reply_markup: { inline_keyboard: [[{text:"✅ Оплачено", callback_data:`paid_${u.id}_${payload.sum}`}, {text:"🚫 БАН", callback_data:`ban_${u.id}`}]] }
-            });
-            u.b -= payload.sum; msg = "Заявка принята!";
+        case 'buy_tc':
+            if (payload.id === 'repair' && u.b >= 50) { u.b -= 50; u.dur = 100; msg = "Починено!"; }
             break;
     }
+
     saveData();
     res.json({ ...u, msg, catchData, logs });
 });
 
-app.listen(PORT, () => console.log(`Server started on ${PORT}`));
+app.listen(PORT, () => console.log(`Server started` ));
