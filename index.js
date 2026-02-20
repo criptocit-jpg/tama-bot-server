@@ -129,12 +129,38 @@ app.post('/api/action', async (req, res) => {
             } catch (e) { msg = "Ошибка очереди. Попробуйте позже."; }
             break;
 
-        case 'cast':
+       case 'cast':
             if (u.energy < 2) { msg = "⚡ Нет энергии!"; break; }
+            if (u.dur <= 0) { msg = "🛠️ Удочка сломана!"; break; }
+
             u.energy -= 2;
-            let weight = (Math.random() * 2 + 0.1).toFixed(2);
-            u.fish += parseFloat(weight);
-            catchData = { type: "Рыба", w: weight };
+            u.dur -= 1;
+            u.lastUpdate = now;
+
+            let isLake = payload.location === 'hope_lake';
+            let chance = Math.random() * 100;
+            
+            // Логика Озера Надежды
+            if (isLake) {
+                if (chance < 0.5) { // Золотой Карп
+                    u.b += 5000;
+                    catchData = { type: "🌟 ЗОЛОТОЙ КАРП", w: "5000 TC" };
+                    addLog(`🔥 ${u.n} поймал Золотого Карпа!`);
+                } else if (chance < 3.0) { // Утерянный кошелек
+                    let gift = Math.floor(Math.random() * 301);
+                    u.b += gift;
+                    catchData = { type: "💰 КОШЕЛЕК", w: `${gift} TC` };
+                } else { // Обычная рыба x2
+                    let w = (Math.random() * 5 + 1).toFixed(2);
+                    u.fish += parseFloat(w);
+                    catchData = { type: "Озерная рыба", w: w };
+                }
+            } else {
+                // Обычное море
+                let w = (Math.random() * 2 + 0.1).toFixed(2);
+                u.fish += parseFloat(w);
+                catchData = { type: "Морская рыба", w: w };
+            }
             break;
 
         case 'sell':
@@ -149,3 +175,4 @@ app.post('/api/action', async (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`Server running on ${PORT}`));
+
