@@ -1,118 +1,170 @@
-// index.js (серверная часть бота)
-const express = require('express');
-const bodyParser = require('body-parser');
-const cors = require('cors');
+const tg = window.Telegram.WebApp;
+tg.ready(); 
+tg.expand();
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+const URL = 'https://tama-bot-server.onrender.com/api/action';
+let user = { lastBonus: 0 };
 
-app.use(cors());
-app.use(bodyParser.json());
-
-let users = {};
-let events = [];
-
-// функция генерации случайной рыбы
-function catchFish() {
-    const types = ['Лосось','Судак','Щука','Карп','Тунец'];
-    const w = (Math.random()*5 + 0.1).toFixed(2);
-    return { type: types[Math.floor(Math.random()*types.length)], w: parseFloat(w) };
+// --------------------- Функции переключения страниц ---------------------
+function showP(id, el){
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+    el.classList.add('active');
 }
 
-// функция обновления топа
-function getTop() {
-    const arr = Object.values(users);
-    arr.sort((a,b)=>b.b - a.b);
-    return arr.slice(0,10).map(u=>({n:u.userName, b:u.b}));
+function toggleAcc(el){ 
+    el.parentElement.classList.toggle('open'); 
 }
 
-// POST endpoint для всех действий
-app.post('/api/action', (req,res)=>{
-    const { userId, userName, action, payload } = req.body;
+// --------------------- Всплыющие уведомления ---------------------
+function toast(txt){
+    let t = document.getElementById('toast');
+    if(!t){
+        t = document.createElement('div');
+        t.id = 'toast';
+        t.className = 'toast';
+        document.body.appendChild(t);
+    }
+    t.innerText = txt;
+    t.style.display='block';
+    setTimeout(()=>t.style.display='none',2500);
+}
 
-    if(!users[userId]) users[userId] = {id:userId,userName, b:0, energy:100, dur:100, boxes:0, fish:0, lastBonus:0};
+// --------------------- Копирование реферальной ссылки ---------------------
+function copyRef(){
+    const text = "https://t.me/TamacoinBot?start=" + user.id;
+    navigator.clipboard.writeText(text);
+    toast("Ссылка скопирована!");
+}
 
-    const u = users[userId];
-    let msg = '';
-    let catchData = null;
+// --------------------- Анимация цифр ---------------------
+function animateNum(el, newValue){
+    if(!el) return;
+    let current = parseInt(el.dataset.value || 0);
+    newValue = Math.floor(newValue);
+    el.dataset.value = newValue;
+    if(current === newValue) return;
+    let diff = newValue - current;
+    let step = Math.max(1, Math.floor(Math.abs(diff)/15));
+    let sign = diff>0?1:-1;
+    let i = 0;
+    let interval = setInterval(()=>{
+        i++;
+        let val = current + sign*step*i;
+        if((sign>0 && val>=newValue)||(sign<0 && val<=newValue)){
+            val=newValue; clearInterval(interval);
+        }
+        el.innerText = val.toLocaleString();
+    },30);
+}
 
-    switch(action){
-        case 'cast':
-            if(u.energy<5){ msg="Недостаточно энергии!"; break; }
-            u.energy -= 5;
-            u.dur = Math.max(0, u.dur - Math.random()*5);
-            const fish = catchFish();
-            u.fish += fish.w;
-            msg = `Вы поймали ${fish.w} кг ${fish.type}!`;
-            catchData = fish;
-            events.unshift(`${userName} поймал ${fish.w} кг ${fish.type}`);
-            if(events.length>20) events.pop();
-        break;
+// --------------------- Основной рендер ---------------------
+function render(d){
+    if(!d || !d.id) return;
+    user = d;
+    animateNum(document.querySelector('#u-b .animated-num'), d.b);
+    animateNum(document.querySelector('#u-en'), d.energy || 0);
+    animateNum(document.querySelector('#u-dur'), Math.max(0,d.dur||0));
+    animateNum(document.querySelector('#u-box'), d.boxes || 0);
+    document.getElementById('u-fish').innerText = (d.fish||0).toFixed(2);
+    document.getElementById('ref-text').innerText = "Ваша ссылка: https://t.me/TamacoinBot?start=" + d.id;
 
-        case 'sell':
-            if(u.fish<=0){ msg="Нечего продавать!"; break; }
-            const gain = Math.floor(u.fish*100);
-            u.b += gain;
-            u.boxes += Math.floor(u.fish);
-            u.fish = 0;
-            msg = `Вы продали рыбу за ${gain} TC!`;
-        break;
+    if(d.top){
+        document.getElementById('top-list').innerHTML = d.top.map((x,i)=>
+            `<div class="stat-mini" style="margin-bottom:5px; display:flex; justify-content:space-between;">
+                <span>${i+1}. ${x.n}</span><b>${Math.floor(x.b)} TC</b>
+            </div>`
+        ).join('');
+    }
+}
 
-        case 'get_daily':
-            const now = Date.now();
-            if(now - u.lastBonus < 86400000){ msg="Бонус ещё недоступен!"; break; }
-            const bonus = 1000;
-            u.b += bonus;
-            u.lastBonus = now;
-            msg = `Вы получили дневной бонус ${bonus} TC!`;
-        break;
+// --------------------- Ловля рыбы ---------------------
+function doCast(){
+    const f = document.getElementById('fish-anim');
+    const b = document.getElementById('btn-cast');
+    const o = document.getElementById('ocean');
+    f.style.display='block'; 
+    b.disabled=true; 
+    o.classList.add('active');
+    setTimeout(()=>{
+        f.style.display='none'; 
+        b.disabled=false; 
+        o.classList.remove('active');
+        api('cast');
+    },1300);
+}
 
-        case 'buy':
-            const shop = {
-                'myakish':100,
-                'gear':200,
-                'energy':50,
-                'repair':50,
-                'titan':150,
-                'bait':200,
-                'strong':200,
-                'license':500
-            };
-            const id = payload.id;
-            if(!shop[id]){ msg="Товар не найден!"; break; }
-            if(u.b<shop[id]){ msg="Недостаточно TC!"; break; }
-            u.b -= shop[id];
-            msg = `Вы купили ${id} за ${shop[id]} TC!`;
-        break;
+// --------------------- Вывод средств ---------------------
+function withdraw(){
+    const wallet = document.getElementById('w-wallet').value;
+    const sum = parseInt(document.getElementById('w-sum').value);
+    if(!wallet || !sum) return toast("Заполни поля!");
+    if(sum<30000) return toast("Вывод возможен только от 30 000 TC!");
+    api('withdraw', {wallet, sum});
+}
 
-        case 'withdraw':
-            const sum = payload.sum || 0;
-            if(sum>u.b){ msg="Недостаточно TC для вывода!"; break; }
-            u.b -= sum;
-            msg = `Заявка на вывод ${sum} TC принята! Средства переведены на кошелек ${payload.wallet}`;
-        break;
+// --------------------- API вызов ---------------------
+async function api(action, payload={}){
+    try{
+        const uid = tg.initDataUnsafe?.user?.id || "7883085758";
+        const uname = tg.initDataUnsafe?.user?.first_name || "Рыбак";
+        const r = await fetch(URL,{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({userId:uid,userName:uname,action,payload})
+        });
+        const d = await r.json();
+        if(d.msg) toast(d.msg);
+        render(d);
+        if(d.events) updateTicker(d.events);
+        if(d.catchData){
+            document.getElementById('catch-res')?.innerHTML=d.catchData.type+'<br>'+d.catchData.w+' кг';
+            document.getElementById('wood-plate').classList.add('show');
+        }
+    }catch(e){ console.error(e); }
+}
 
-        default:
-            msg = "Неизвестное действие!";
-        break;
+// --------------------- Обновление бегущей строки ---------------------
+function updateTicker(events){
+    const ticker = document.getElementById('ticker');
+    if(!events||!events.length) return;
+    ticker.innerHTML = events.join(' | ');
+    ticker.style.animation='none';
+    void ticker.offsetWidth;
+    ticker.style.animation='scroll 20s linear infinite';
+}
+
+// --------------------- Таймеры ---------------------
+setInterval(()=>{
+    const now = new Date();
+
+    // Золотой час
+    let target = new Date();
+    target.setHours(19,0,0,0);
+    if(now>target) target.setDate(target.getDate()+1);
+    let diff = target-now;
+    const h = String(Math.floor(diff/3600000)).padStart(2,'0');
+    const m = String(Math.floor((diff%3600000)/60000)).padStart(2,'0');
+    const s = String(Math.floor((diff%60000)/1000)).padStart(2,'0');
+    document.getElementById('t-gold').innerText=(now.getHours()===19)?"АКТИВЕН! 🔥":h+":"+m+":"+s;
+
+    // Ежедневный бонус
+    let bDiff=(user.lastBonus+86400000)-Date.now();
+    if(bDiff>0){
+        const bh=String(Math.floor(bDiff/3600000)).padStart(2,'0');
+        const bm=String(Math.floor((bDiff%3600000)/60000)).padStart(2,'0');
+        const bs=String(Math.floor((bDiff%60000)/1000)).padStart(2,'0');
+        document.getElementById('t-daily').innerText=bh+":"+bm+":"+bs;
+        document.getElementById('btn-daily').style.display='none';
+    } else {
+        document.getElementById('t-daily').innerText="ГОТОВО!";
+        document.getElementById('btn-daily').style.display='block';
     }
 
-    const response = {
-        msg,
-        id:u.id,
-        userName:u.userName,
-        b:u.b,
-        energy:u.energy,
-        dur:u.dur,
-        boxes:u.boxes,
-        fish:u.fish,
-        lastBonus:u.lastBonus,
-        top: getTop(),
-        events,
-        catchData
-    };
+},1000);
 
-    res.json(response);
-});
-
-app.listen(PORT,()=>console.log(`Server running on port ${PORT}`));
+// --------------------- Инициализация прокрутки ---------------------
+const style=document.createElement('style');
+style.innerHTML=`@keyframes scroll {0%{transform:translateX(100%);}100%{transform:translateX(-100%);}}`;
+document.head.appendChild(style);
