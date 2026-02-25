@@ -1,8 +1,8 @@
+// index.js
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const axios = require('axios');
-const crypto = require('crypto');
 
 const app = express();
 app.use(cors());
@@ -12,32 +12,19 @@ const PORT = process.env.PORT || 3000;
 const DATA_FILE = './users.json';
 
 const BOT_TOKEN = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg';
-const ADMIN_CHAT_ID = '7883085758';
+const ADMIN_ID = '7883085758'; // твой Telegram ID
 
 let users = {};
 let logs = ["Сервер Tamacoin запущен!"];
 let serverEvents = [];
 let dailyCounters = { goldenCarp: 0, lostWallets: 0 };
 
-// --- Настройка лимитов ---
+// --- Лимиты ---
 const GOLDEN_LIMIT = 10;
 const WALLET_LIMIT = 200;
 const MIN_WITHDRAW = 30000;
 
-// --- Джекпот ---
-let jackpot = {
-    pool: 0,
-    tickets: {},
-    lastHash: "",
-    lastSeed: "",
-    lastWinner: null,
-    nextDraw: Date.now() + 86400000
-};
-
-// --- Админка ---
-let admins = { '7883085758': true }; // ID админа
-
-// --- Загрузка и сохранение данных ---
+// --- Работа с данными ---
 function loadData() {
     if (fs.existsSync(DATA_FILE)) {
         try { users = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } 
@@ -47,7 +34,7 @@ function loadData() {
 function saveData() { fs.writeFileSync(DATA_FILE, JSON.stringify(users, null, 2)); }
 loadData();
 
-// --- Логи ---
+// --- Логи и события ---
 function addLog(m) {
     logs.unshift(`[${new Date().toLocaleTimeString()}] ${m}`);
     serverEvents.unshift(`${m}`);
@@ -55,7 +42,7 @@ function addLog(m) {
     if(serverEvents.length>20) serverEvents.pop();
 }
 
-// --- Дневные лимиты ---
+// --- Сброс дневных лимитов ---
 setInterval(()=>{
     const now = new Date();
     if(now.getHours()===0 && now.getMinutes()===0){
@@ -64,65 +51,10 @@ setInterval(()=>{
     }
 },60000);
 
-// --- Джекпот функции ---
-function generateNextHash(){
-    const seed = crypto.randomBytes(16).toString("hex");
-    const hash = crypto.createHash('sha256').update(seed).digest('hex');
-    jackpot.lastSeed = seed;
-    jackpot.lastHash = hash;
-}
-generateNextHash();
+// --- Проверка администратора ---
+function isAdmin(id){ return String(id) === String(ADMIN_ID); }
 
-function addTickets(userId, amount){
-    if(!jackpot.tickets[userId]) jackpot.tickets[userId]=0;
-    jackpot.tickets[userId] = Math.min(200, jackpot.tickets[userId] + amount);
-}
-
-function drawJackpot(){
-    const usersArr = Object.entries(jackpot.tickets);
-    if(usersArr.length===0 || jackpot.pool<=0) return;
-
-    let total=0;
-    usersArr.forEach(([id,t])=> total+=t);
-
-    const rand = parseInt(
-        crypto.createHash('sha256')
-        .update(jackpot.lastSeed)
-        .digest('hex').slice(0,12),16
-    ) % total;
-
-    let sum=0, winner=null;
-
-    for(const [id,t] of usersArr){
-        sum+=t;
-        if(rand<sum){ winner=id; break; }
-    }
-
-    if(!winner) return;
-
-    users[winner].b += jackpot.pool;
-    jackpot.lastWinner = {
-        id:winner,
-        name:users[winner].n,
-        win:jackpot.pool
-    };
-
-    addLog(`🏆 ${users[winner].n} выиграл ДЖЕКПОТ ${jackpot.pool} TC!`);
-
-    jackpot.pool=0;
-    jackpot.tickets={};
-
-    generateNextHash();
-}
-
-setInterval(()=>{
-    if(Date.now()>=jackpot.nextDraw){
-        drawJackpot();
-        jackpot.nextDraw = Date.now()+86400000;
-    }
-},60000);
-
-// --- API ---
+// --- API --- 
 app.post('/api/action', async (req,res)=>{
     const { userId, userName, action, payload } = req.body;
     const now = Date.now();
@@ -174,6 +106,7 @@ app.post('/api/action', async (req,res)=>{
                 if(u.buffs.myakish>0) u.buffs.myakish--;
                 catchData={type:"Рыба", w:w.toFixed(2)};
 
+                // --- Редкие события ---
                 if(u.buffs.license){
                     if(dailyCounters.goldenCarp<GOLDEN_LIMIT && Math.random()<0.01){
                         u.fish+=5000;
@@ -198,10 +131,6 @@ app.post('/api/action', async (req,res)=>{
             u.b+=money-tax; u.fish=0;
             msg=`Продано на ${money-tax} TC! (Налог 5%)`;
             addLog(`${u.n} продал рыбу за ${money-tax} TC`);
-
-            // Джекпот
-            jackpot.pool += tax;
-            addTickets(userId, Math.floor(money/50));
             break;
 
         case 'buy':
@@ -209,12 +138,6 @@ app.post('/api/action', async (req,res)=>{
             const prices={ myakish:100, gear:200, energy:50, repair:50, titan:150, bait:200, strong:200, license:500 };
             if(u.b<prices[item]){ msg="Недостаточно TC!"; break; }
             u.b-=prices[item];
-
-            // Джекпот
-            const jp = Math.floor(prices[item]*0.05);
-            jackpot.pool += jp;
-            addTickets(userId, Math.floor(prices[item]/20));
-
             const h=3600000;
             if(item==='myakish') u.buffs.myakish+=10;
             if(item==='energy') u.energy=100;
@@ -237,11 +160,10 @@ app.post('/api/action', async (req,res)=>{
             if(!u.withdrawals) u.withdrawals=[];
             const id=Math.floor(Math.random()*1000000);
             u.withdrawals.push({id, wallet, sum:amt, status:'pending', date:now});
-
             try{
-                const text=`💰 <b>НОВАЯ ЗАЯВКА НА ВЫВОД</b>\n\n👤 Игрок: ${u.n} (ID: <code>${u.id}</code>)\n💵 Сумма: <b>${amt} TC</b>\n🆔 Заявка: ${id}\n💳 Кошелек: <code>${wallet}</code>`;
+                const text=`💰 <b>НОВАЯ ЗАЯВКА НА ВЫВОД</b>\n\n👤 Игрок: ${u.n} (ID: <code>${u.id}</code>)\n💵 Сумма: <b>${amt} TC</b>\n👛 Кошелек: <code>${wallet}</code>\n🆔 Заявка: ${id}`;
                 await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-                    chat_id:ADMIN_CHAT_ID,
+                    chat_id:ADMIN_ID,
                     text,
                     parse_mode:'HTML'
                 });
@@ -256,17 +178,74 @@ app.post('/api/action', async (req,res)=>{
         case 'get_events':
             res.json({events: serverEvents});
             return;
-
-        case 'admin_draw_jp':
-            if(!admins[userId]){ msg="Нет доступа!"; break; }
-            drawJackpot();
-            msg="Розыгрыш проведен!";
-            break;
     }
 
     saveData();
     const top=Object.values(users).sort((a,b)=>b.b-a.b).slice(0,10).map(x=>({n:x.n,b:x.b}));
-    res.json({...u, msg, catchData, top, logs, events:serverEvents, jackpot});
+    res.json({...u, msg, catchData, top, logs, events:serverEvents});
 });
 
+// --- Админка API ---
+app.post('/api/admin/users',(req,res)=>{
+    const {userId}=req.body;
+    if(!isAdmin(userId)) return res.status(403).json({error:"not admin"});
+    const list = Object.values(users).map(u=>({
+        id:u.id,name:u.n,balance:Math.floor(u.b),energy:u.energy,fish:Math.floor(u.fish),last:u.lastUpdate
+    }));
+    res.json(list);
+});
+
+app.post('/api/admin/balance',(req,res)=>{
+    const {userId,target,amount,type}=req.body;
+    if(!isAdmin(userId)) return res.status(403).json({error:"not admin"});
+    const u=users[target]; if(!u) return res.json({error:"player not found"});
+    const val=parseInt(amount);
+    if(type==="add") u.b+=val;
+    if(type==="remove") u.b=Math.max(0,u.b-val);
+    addLog(`ADMIN изменил баланс ${u.n} на ${val} (${type})`);
+    saveData();
+    res.json({ok:true,balance:u.b});
+});
+
+app.post('/api/admin/god',(req,res)=>{
+    const {userId,target}=req.body;
+    if(!isAdmin(userId)) return res.status(403).json({error:"not admin"});
+    const u=users[target]; if(!u) return res.json({error:"player not found"});
+    u.energy=100; u.dur=100;
+    u.buffs.titan=Date.now()+9999999999;
+    u.buffs.bait=Date.now()+9999999999;
+    u.buffs.strong=Date.now()+9999999999;
+    u.buffs.license=true;
+    addLog(`ADMIN включил режим бога для ${u.n}`);
+    saveData();
+    res.json({ok:true});
+});
+
+app.post('/api/admin/withdraws',(req,res)=>{
+    const {userId}=req.body;
+    if(!isAdmin(userId)) return res.status(403).json({error:"not admin"});
+    let list=[];
+    for(const id in users){
+        const u=users[id];
+        if(u.withdrawals){
+            u.withdrawals.forEach(w=>{
+                if(w.status==="pending") list.push({...w,player:u.n,uid:u.id});
+            });
+        }
+    }
+    res.json(list);
+});
+
+app.post('/api/admin/withdraw_action',(req,res)=>{
+    const {userId,uid,wid,action}=req.body;
+    if(!isAdmin(userId)) return res.status(403).json({error:"not admin"});
+    const u=users[uid]; if(!u||!u.withdrawals) return res.json({error:"not found"});
+    const w=u.withdrawals.find(x=>x.id==wid); if(!w) return res.json({error:"withdraw not found"});
+    w.status=action;
+    addLog(`ADMIN ${action} вывод ${u.n} ${w.sum} TC`);
+    saveData();
+    res.json({ok:true});
+});
+
+// --- Сервер ---
 app.listen(PORT,()=>console.log(`Server running on ${PORT}`));
