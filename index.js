@@ -1,97 +1,121 @@
-const tg=window.Telegram.WebApp;
-tg.ready(); tg.expand();
-const URL='https://tama-bot-server.onrender.com/api/action';
-let user={lastBonus:0};
+import express from 'express';
+import bodyParser from 'body-parser';
+import fetch from 'node-fetch';
 
-function showP(id,el){
-    document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-    document.getElementById(id)?.classList.add('active');
-    document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
-    el.classList.add('active');
-}
-function toggleAcc(el){ el.parentElement.classList.toggle('open'); }
-function toast(txt){
-    let t=document.getElementById('toast');
-    if(!t){ t=document.createElement('div'); t.id='toast'; t.className='toast'; document.body.appendChild(t);}
-    t.innerText=txt; t.style.display='block';
-    setTimeout(()=>t.style.display='none',2500);
-}
-function copyRef(){
-    const text="https://t.me/TamacoinBot?start="+(user.id||"7883085758");
-    navigator.clipboard.writeText(text);
-    toast("Ссылка скопирована!");
-}
+const app = express();
+app.use(bodyParser.json());
 
-async function api(action,payload={}){
-    try{
-        const uid=tg.initDataUnsafe?.user?.id||"7883085758";
-        const uname=tg.initDataUnsafe?.user?.first_name||"Рыбак";
-        const r=await fetch(URL,{
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({userId:uid,userName:uname,action,payload})
-        });
-        const d=await r.json();
-        if(d.msg) toast(d.msg);
-        render(d);
-    }catch(e){ console.error(e); }
-}
+const PORT = process.env.PORT || 3000;
 
-function render(d){
-    if(!d||!d.id) return;
-    user=d;
-    animateNumber('u-b',Math.floor(d.b||0));
-    document.getElementById('u-fish').innerText=(d.fish||0).toFixed(2);
-    document.getElementById('u-en').innerText=d.energy||0;
-    document.getElementById('u-dur').innerText=Math.max(0,d.dur||0)+'%';
-    document.getElementById('u-box').innerText=d.boxes||0;
-}
+// Хранилище пользователей (для примера, на проде лучше БД)
+let users = {};
+let events = [];
 
-function animateNumber(id,target){
-    const el=document.getElementById(id);
-    const start=parseInt(el.innerText.replace(/\D/g,''))||0;
-    const duration=500;
-    const stepTime=15;
-    const steps=Math.ceil(duration/stepTime);
-    let current=0;
-    const diff=target-start;
-    const interval=setInterval(()=>{
-        current++;
-        el.innerText=Math.floor(start + diff*current/steps).toLocaleString();
-        if(current>=steps) clearInterval(interval);
-    },stepTime);
-}
+// Игра: примеры бонусов, золотой час
+const GOLD_HOUR = 19; // 19:00
+const DAILY_BONUS = 1000;
 
-function doCast(){
-    const f=document.getElementById('fish-anim');
-    const b=document.getElementById('btn-cast');
-    const o=document.getElementById('ocean');
-    f.style.display='block'; b.disabled=true; o.classList.add('active');
-    setTimeout(()=>{
-        f.style.display='none'; b.disabled=false; o.classList.remove('active');
-        api('cast');
-    },1300);
-}
-
-setInterval(()=>{
-    const now=new Date();
-    let target=new Date(); target.setHours(19,0,0,0);
-    if(now>target) target.setDate(target.getDate()+1);
-    let diff=target-now;
-    const h=String(Math.floor(diff/3600000)).padStart(2,'0');
-    const m=String(Math.floor((diff%3600000)/60000)).padStart(2,'0');
-    const s=String(Math.floor((diff%60000)/1000)).padStart(2,'0');
-    document.getElementById('t-gold').innerText=(now.getHours()===19)?"АКТИВЕН! 🔥":h+":"+m+":"+s;
-
-    let bDiff=(user.lastBonus+86400000)-Date.now();
-    if(bDiff>0){
-        const bh=String(Math.floor(bDiff/3600000)).padStart(2,'0');
-        const bm=String(Math.floor((bDiff%3600000)/60000)).padStart(2,'0');
-        const bs=String(Math.floor((bDiff%60000)/1000)).padStart(2,'0');
-        document.getElementById('t-daily').innerText=bh+":"+bm+":"+bs;
-        document.getElementById('btn-daily').style.display='none';
-    }else{
-        document.getElementById('t-daily').innerText="ГОТОВО!";
-        document.getElementById('btn-daily').style.display='block';
+function getUser(id, name) {
+    if (!users[id]) {
+        users[id] = {
+            id,
+            name,
+            b: 0,
+            fish: 0,
+            energy: 100,
+            dur: 100,
+            boxes: 0,
+            lastBonus: 0,
+            top: []
+        };
     }
-},1000);
+    return users[id];
+}
+
+function formatTop() {
+    // Топ игроков по TC
+    return Object.values(users)
+        .sort((a, b) => b.b - a.b)
+        .slice(0, 10)
+        .map(u => ({ n: u.name, b: u.b }));
+}
+
+// Основной API для действий игрока
+app.post('/api/action', (req, res) => {
+    const { userId, userName, action, payload } = req.body;
+    const u = getUser(userId, userName);
+    let msg = '';
+    try {
+        switch (action) {
+            case 'cast':
+                if (u.energy <= 0) { msg = 'Нет энергии!'; break; }
+                const catchWeight = +(Math.random() * 5).toFixed(2);
+                u.fish += catchWeight;
+                u.energy = Math.max(0, u.energy - 10);
+                msg = `Поймана рыба ${catchWeight} кг!`;
+                events.unshift(`${u.name} поймал ${catchWeight} кг!`);
+                break;
+            case 'sell':
+                if (u.fish <= 0) { msg = 'Нет рыбы!'; break; }
+                const earned = Math.floor(u.fish * 100);
+                u.b += earned;
+                u.fish = 0;
+                msg = `Продано за ${earned} TC!`;
+                events.unshift(`${u.name} продал рыбу за ${earned} TC`);
+                break;
+            case 'buy':
+                const items = { myakish: 100, gear: 200, energy: 50, repair: 50, titan: 150, bait: 200, strong: 200, license: 500 };
+                const id = payload.id;
+                if (!items[id]) { msg = 'Товар не найден'; break; }
+                if (u.b < items[id]) { msg = 'Недостаточно TC'; break; }
+                u.b -= items[id];
+                msg = `Куплено: ${id}`;
+                events.unshift(`${u.name} купил ${id} за ${items[id]} TC`);
+                break;
+            case 'get_daily':
+                const now = Date.now();
+                if (now - u.lastBonus >= 86400000) { // 24 часа
+                    u.b += DAILY_BONUS;
+                    u.lastBonus = now;
+                    msg = `Бонус ${DAILY_BONUS} TC получен!`;
+                    events.unshift(`${u.name} получил дневной бонус ${DAILY_BONUS} TC`);
+                } else {
+                    msg = 'Бонус еще не доступен';
+                }
+                break;
+            case 'withdraw':
+                const { wallet, sum } = payload;
+                if (sum < 30000) { msg = 'Вывод возможен от 30 000 TC'; break; }
+                if (u.b < sum) { msg = 'Недостаточно TC'; break; }
+                u.b -= sum;
+                msg = `Заявка на вывод ${sum} TC отправлена на кошелек ${wallet}`;
+                events.unshift(`${u.name} вывел ${sum} TC на ${wallet}`);
+                break;
+            default:
+                msg = 'Неизвестное действие';
+        }
+
+        res.json({
+            id: u.id,
+            b: u.b,
+            fish: u.fish,
+            energy: u.energy,
+            dur: u.dur,
+            boxes: u.boxes,
+            lastBonus: u.lastBonus,
+            top: formatTop(),
+            events: events.slice(0, 20),
+            msg,
+            catchData: action === 'cast' ? { type: 'Рыба', w: +(Math.random()*5).toFixed(2) } : null
+        });
+    } catch (e) {
+        console.error(e);
+        res.json({ msg: 'Ошибка сервера' });
+    }
+});
+
+// Статика для index.html и анимаций
+app.use(express.static('.'));
+
+// Запуск сервера
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
