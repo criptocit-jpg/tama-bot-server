@@ -1,0 +1,12 @@
+{
+  "users": {},
+  "jackpot": {
+    "pool": 15000,
+    "lastWinner": "Никто"
+  },
+  "dailyCounters": {
+    "goldenCarp": 0,
+    "lostWallets": 0
+  },
+  "lastSave": 0
+}
