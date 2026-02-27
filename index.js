@@ -10,92 +10,58 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = './users.json';
 
-// --- [БЛОК 1: НАСТРОЙКИ ТЕЛЕГРАМ И АДМИНКИ] ---
+// --- НАСТРОЙКИ ---
 const BOT_TOKEN = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg';
 const ADMIN_ID = '7883085758'; 
 
-// --- [БЛОК 2: ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И СОСТОЯНИЕ] ---
 let users = {};
-let logs = ["Сервер Tamacoin 4.1.5: Экономика и анимация обновлены!"];
-let serverEvents = ["Добро пожаловать!", "Джекпот пополняется с каждой сделки!"];
-let dailyCounters = { goldenCarp: 0, lostWallets: 0 };
-let jackpot = { pool: 1000, lastWinner: "Никто" }; // Установлено 1000 TC по умолчанию
+let logs = ["Сервер 4.2.0 запущен: Озеро Надежды активно!"];
+let serverEvents = ["10 Золотых карпов ждут на Озере Надежды!"];
+let jackpot = { pool: 1000, lastWinner: "Никто" };
+let globalState = { weeklyCarpCaught: 0, lastReset: Date.now() };
 
-// --- [БЛОК 3: КОНСТАНТЫ ЭКОНОМИКИ И ЛИМИТЫ] ---
-const MIN_JACKPOT = 1000;      // Минимальный фонд
-const SELL_PRICE = 2;          // Цена 1 кг рыбы = 2 TC
-const TAX_RATE = 0.05;         // Налог 5% при продаже
-const TAX_TO_POOL = 1.0;       // Весь налог (100% от налога, т.е. 5% от суммы) идет в пул
-const SHOP_TAX_TO_POOL = 0.05; // 5% от цены покупки в магазине идет в Джекпот
-const GOLDEN_LIMIT = 10;       
-const WALLET_LIMIT = 200;      
-const MIN_WITHDRAW = 30000;    
+const MIN_JACKPOT = 1000;
+const SELL_PRICE = 2; // 1кг = 2 TC
+const TAX_RATE = 0.05; // Налог 5%
 
-// --- [БЛОК 4: РАБОТА С ФАЙЛАМИ ДАННЫХ] ---
+// --- РАБОТА С ДАННЫМИ ---
 function loadData() {
     if (fs.existsSync(DATA_FILE)) {
         try { 
             const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); 
             users = data.users || {};
             jackpot = data.jackpot || { pool: MIN_JACKPOT, lastWinner: "Никто" };
-            dailyCounters = data.dailyCounters || { goldenCarp: 0, lostWallets: 0 };
-        } catch(e) { 
-            console.error("Ошибка загрузки:", e);
-            users = {}; 
-        }
+            globalState = data.globalState || { weeklyCarpCaught: 0, lastReset: Date.now() };
+        } catch(e) { console.error("Ошибка загрузки:", e); }
     }
 }
-
 function saveData() { 
-    const dataToSave = { users, jackpot, dailyCounters, lastSave: Date.now() };
+    const dataToSave = { users, jackpot, globalState, lastSave: Date.now() };
     fs.writeFileSync(DATA_FILE, JSON.stringify(dataToSave, null, 2)); 
 }
 loadData();
 
-// --- [БЛОК 5: ЛОГИРОВАНИЕ СОБЫТИЙ] ---
 function addLog(m) {
     const time = new Date().toLocaleTimeString();
     logs.unshift(`[${time}] ${m}`);
-    serverEvents.unshift(`${m}`);
+    serverEvents.unshift(m);
     if(logs.length > 20) logs.pop();
     if(serverEvents.length > 15) serverEvents.pop();
 }
 
-// --- [БЛОК 6: ПЛАНИРОВЩИК И СБРОС ЛИМИТОВ] ---
+// --- ЕЖЕНЕДЕЛЬНЫЙ СБРОС (Понедельник 00:00) ---
 setInterval(() => {
-    const now = new Date();
-    if(now.getHours() === 0 && now.getMinutes() === 0) {
-        dailyCounters.goldenCarp = 0;
-        dailyCounters.lostWallets = 0;
-        addLog("Дневные лимиты обновлены");
+    const now = Date.now();
+    // Сброс карпов раз в 7 дней
+    if (now - globalState.lastReset > 604800000) {
+        globalState.weeklyCarpCaught = 0;
+        globalState.lastReset = now;
+        addLog("🌊 Лимит Золотых Карпов на Озере Надежды обновлен!");
     }
-    if(now.getDay() === 0 && now.getHours() === 21 && now.getMinutes() === 0) {
-        awardWeeklyJackpot();
-    }
-    saveData(); 
+    saveData();
 }, 60000);
 
-// --- [БЛОК 7: ЛОГИКА ЕЖЕНЕДЕЛЬНОГО ДЖЕКПОТА] ---
-function awardWeeklyJackpot() {
-    let winner = null;
-    let maxActivity = -1;
-    for(let id in users) {
-        if(users[id].total > maxActivity) {
-            maxActivity = users[id].total;
-            winner = users[id];
-        }
-    }
-    if(winner && maxActivity > 0) {
-        const prize = Math.floor(jackpot.pool);
-        winner.b += prize;
-        jackpot.lastWinner = winner.n;
-        addLog(`🏆 КУШ НЕДЕЛИ: ${winner.n} забирает ${prize} TC!`);
-        jackpot.pool = MIN_JACKPOT;
-        for(let id in users) users[id].total = 0;
-    }
-}
-
-// --- [БЛОК 8: ОСНОВНОЙ ОБРАБОТЧИК API] ---
+// --- API ---
 app.post('/api/action', async (req, res) => {
     const { userId, userName, action, payload } = req.body;
     const now = Date.now();
@@ -103,10 +69,9 @@ app.post('/api/action', async (req, res) => {
 
     if (!users[userId]) {
         users[userId] = {
-            id: userId, n: userName || "Рыбак", b: 150, s: 0,
-            fish: 0, energy: 100, dur: 100,
-            buffs: { myakish:0, gear:0, titan:0, bait:0, strong:0, license:false },
-            total: 0, lastBonus: 0, lastUpdate: now, withdrawals: []
+            id: userId, n: userName || "Рыбак", b: 150, fish: 0, 
+            energy: 100, dur: 100, total: 0, lastBonus: 0, lastUpdate: now,
+            buffs: { titan: false, poacher: 0, hope: 0, vip: 0, myakish: 0 }
         };
     }
 
@@ -114,6 +79,7 @@ app.post('/api/action', async (req, res) => {
     let msg = "";
     let catchData = null;
 
+    // Регенерация энергии
     const passed = now - u.lastUpdate;
     if (passed > 300000) { 
         u.energy = Math.min(100, u.energy + Math.floor(passed / 300000)); 
@@ -121,47 +87,47 @@ app.post('/api/action', async (req, res) => {
     }
 
     switch (action) {
-        case 'load': break;
-
-        case 'get_daily':
-            if (now - u.lastBonus < 86400000) { msg = "Бонус не готов!"; } 
-            else {
-                const prize = 50 + Math.floor(Math.random() * 50);
-                u.b += prize; u.energy = 100; u.lastBonus = now;
-                msg = `Получено ${prize} TC и энергия!`;
-                addLog(`${u.n} взял бонус`);
-            }
-            break;
-
         case 'cast':
+            const lake = payload.lake || 'normal';
             if (u.energy < 2) { msg = "Нет энергии!"; break; }
-            if (u.dur <= 0) { msg = "Почини удочку!"; break; }
+            if (u.dur <= 0 && !u.buffs.titan) { msg = "Почини удочку!"; break; }
+            
+            // Проверка доступа к озеру
+            if (lake === 'hope' && (!u.buffs.hope || u.buffs.hope < now)) {
+                msg = "Купи доступ к Озеру Надежды!"; break;
+            }
+
             u.energy -= 2;
-            u.dur = Math.max(0, u.dur - ((u.buffs.titan > now) ? 0.5 : 1));
-            u.total = (u.total || 0) + 1;
+            if (!u.buffs.titan) u.dur = Math.max(0, u.dur - 1);
+            u.total++;
 
+            // ШАНСЫ
             let rand = Math.random() * 100;
-            if (rand < 5 && (!u.buffs.myakish || u.buffs.myakish <= 0)) { msg = "Срыв! 🐟"; } 
-            else if (rand < 7.5 && (!u.buffs.strong || u.buffs.strong < now)) { 
-                u.dur = Math.max(0, u.dur - 5); msg = "Обрыв лески! 🪝"; 
+            if (rand < 5 && (!u.buffs.myakish || u.buffs.myakish <= 0)) {
+                msg = "Срыв! 🐟"; 
             } else {
-                let w = (Math.random() * 3 + 0.5);
-                if (u.buffs.bait > now) w *= 2;
-                if (new Date().getHours() === 19) w *= 2;
-                u.fish += w;
-                if (u.buffs.myakish > 0) u.buffs.myakish--;
-                catchData = { type: "Рыба", w: w.toFixed(2) };
+                let weight = (Math.random() * 3 + 0.5);
+                catchData = { type: "Обычная рыба", w: weight.toFixed(2) + " кг" };
+                u.fish += weight;
+                if(u.buffs.myakish > 0) u.buffs.myakish--;
 
-                if (u.buffs.license) {
-                    if (dailyCounters.goldenCarp < GOLDEN_LIMIT && Math.random() < 0.01) {
-                        u.fish += 5000; catchData = { type: "Золотой Карп!", w: 5000 };
-                        dailyCounters.goldenCarp++;
-                        addLog(`${u.n} поймал Золотого Карпа!`);
-                    }
-                    if (dailyCounters.lostWallets < WALLET_LIMIT && Math.random() < 0.005) {
+                // Логика Озера Надежды
+                if (lake === 'hope') {
+                    // ЗОЛОТОЙ КАРП
+                    let carpChance = (u.buffs.poacher > now) ? 0.5 : 0.01;
+                    if (globalState.weeklyCarpCaught < 10 && (Math.random() * 100) < carpChance) {
+                        const carpTC = 5000; 
+                        u.fish += (carpTC / SELL_PRICE); // Эквивалент в весе
+                        catchData = { type: "ЗОЛОТОЙ КАРП! 🏆", w: "5000 TC (эквив.)" };
+                        globalState.weeklyCarpCaught++;
+                        addLog(`${u.n} выловил КАРПА (${globalState.weeklyCarpCaught}/10)!`);
+                    } 
+                    // КОШЕЛЬКИ
+                    else if (Math.random() < 0.03) {
                         const walletTC = 100 + Math.floor(Math.random() * 201);
-                        u.b += walletTC; dailyCounters.lostWallets++;
-                        addLog(`${u.n} выловил кошелек +${walletTC} TC!`);
+                        u.b += walletTC;
+                        catchData = { type: "Забытый кошелек 💰", w: walletTC + " TC" };
+                        addLog(`${u.n} нашел кошелек на ${walletTC} TC`);
                     }
                 }
             }
@@ -171,59 +137,31 @@ app.post('/api/action', async (req, res) => {
             if (u.fish <= 0) { msg = "Садок пуст!"; break; }
             const income = Math.floor(u.fish * SELL_PRICE);
             const tax = Math.floor(income * TAX_RATE);
-            jackpot.pool += tax; // 5% от продажи идет в пул
+            jackpot.pool += tax;
             u.b += (income - tax);
             u.fish = 0;
-            msg = `Продано на ${income - tax} TC (Налог ${tax} TC)`;
+            msg = `Продано! +${income - tax} TC (Налог ${tax})`;
             break;
 
-        case 'buy':
+        case 'buy': // Магазин за TC
             const item = payload.id;
-            const prices = { myakish:100, gear:200, energy:50, repair:50, titan:150, bait:200, strong:200, license:500 };
-            if (u.b < prices[item]) { msg = "Недостаточно TC!"; break; }
-            u.b -= prices[item];
-            jackpot.pool += (prices[item] * SHOP_TAX_TO_POOL); // 5% от покупки в пул
-
-            if (item === 'myakish') u.buffs.myakish += 10;
-            if (item === 'energy') u.energy = 100;
-            if (item === 'repair') u.dur = 100;
-            const h = 3600000;
-            if (item === 'gear') u.buffs.gear = now + (24 * h);
-            if (item === 'titan') u.buffs.titan = now + (12 * h);
-            if (item === 'bait') u.buffs.bait = now + (3 * h);
-            if (item === 'strong') u.buffs.strong = now + (24 * h);
-            if (item === 'license') u.buffs.license = true;
-            msg = "Успешно куплено!";
+            if (item === 'repair' && u.b >= 50) { u.b -= 50; u.dur = 100; msg = "Починено!"; }
+            if (item === 'energy' && u.b >= 50) { u.b -= 50; u.energy = 100; msg = "Заряжен!"; }
+            if (item === 'myakish' && u.b >= 100) { u.b -= 100; u.buffs.myakish += 10; msg = "Куплено!"; }
             break;
 
-        case 'withdraw':
-            const { wallet, sum } = payload;
-            const amt = parseInt(sum);
-            if (!wallet || isNaN(amt) || amt < MIN_WITHDRAW) { msg = `Минимум ${MIN_WITHDRAW} TC`; break; }
-            if (u.b < amt) { msg = "Мало TC!"; break; }
-            u.b -= amt;
-            u.withdrawals.push({ id: Math.floor(Math.random()*99999), wallet, sum: amt, status: 'pending', date: now });
-            try {
-                await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-                    chat_id: ADMIN_ID, parse_mode: 'HTML',
-                    text: `💰 <b>ВЫВОД</b>\nЮзер: ${u.n}\nСумма: ${amt} TC\nКошелек: <code>${wallet}</code>`
-                });
-                msg = "Заявка отправлена!";
-            } catch(e) { msg = "Ошибка уведомления админа!"; }
+        case 'get_daily':
+            if (now - u.lastBonus < 86400000) { msg = "Еще не время!"; }
+            else {
+                const p = 50 + Math.floor(Math.random()*50);
+                u.b += p; u.energy = 100; u.lastBonus = now;
+                msg = `Бонус ${p} TC!`;
+            }
             break;
-
-        case 'get_events':
-            return res.json({ events: serverEvents });
     }
 
     saveData();
-    const top = Object.values(users).sort((a,b) => b.b - a.b).slice(0, 10).map(x => ({ n: x.n, b: x.b }));
-    res.json({ ...u, msg, catchData, top, logs, events: serverEvents, jackpot: jackpot });
+    res.json({ ...u, msg, catchData, jackpot, events: serverEvents });
 });
 
-app.post('/api/admin/users', (req, res) => {
-    if (String(req.body.userId) !== String(ADMIN_ID)) return res.status(403).send("No");
-    res.json(Object.values(users).map(u => ({ id:u.id, n:u.n, b:u.b, total:u.total })));
-});
-
-app.listen(PORT, () => console.log(`[OK] Monolith 4.1.5 активен на порту ${PORT}`));
+app.listen(PORT, () => console.log(`[OK] Tamacoin Monolith 4.2.0 на порту ${PORT}`));
