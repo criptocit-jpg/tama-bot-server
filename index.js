@@ -15,8 +15,8 @@ const BOT_TOKEN = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg';
 const ADMIN_ID = '7883085758'; 
 
 let users = {};
-let logs = ["Сервер 4.2.0 запущен: Озеро Надежды активно!"];
-let serverEvents = ["10 Золотых карпов ждут на Озере Надежды!"];
+let logs = ["Сервер 4.2.1 запущен: Озеро Надежды активно!"];
+let serverEvents = ["10 Золотых карпов ждут на Озере Надежды!", "VIP-магазин пополнен!"];
 let jackpot = { pool: 1000, lastWinner: "Никто" };
 let globalState = { weeklyCarpCaught: 0, lastReset: Date.now() };
 
@@ -70,8 +70,9 @@ app.post('/api/action', async (req, res) => {
     if (!users[userId]) {
         users[userId] = {
             id: userId, n: userName || "Рыбак", b: 150, fish: 0, 
-            energy: 100, dur: 100, total: 0, lastBonus: 0, lastUpdate: now,
-            buffs: { titan: false, poacher: 0, hope: 0, vip: 0, myakish: 0 }
+            energy: 50, dur: 100, total: 0, lastBonus: 0, lastUpdate: now,
+            buffs: { titan: false, poacher: 0, hope: 0, vip: 0, myakish: 0 },
+            stats: { withdrawLimit: 30000, priority: false } // Доп. поля для VIP
         };
     }
 
@@ -79,10 +80,16 @@ app.post('/api/action', async (req, res) => {
     let msg = "";
     let catchData = null;
 
-    // Регенерация энергии
+    // --- ЛОГИКА VIP ПРИВИЛЕГИЙ ---
+    const isVip = u.buffs.vip > now;
+    const maxEnergy = isVip ? 100 : 50;
+    const currentWithdrawLimit = isVip ? 10000 : 30000;
+    const withdrawalTime = isVip ? "1 час" : "24 часа";
+
+    // Регенерация энергии (теперь зависит от maxEnergy)
     const passed = now - u.lastUpdate;
     if (passed > 300000) { 
-        u.energy = Math.min(100, u.energy + Math.floor(passed / 300000)); 
+        u.energy = Math.min(maxEnergy, u.energy + Math.floor(passed / 300000)); 
         u.lastUpdate = now; 
     }
 
@@ -146,22 +153,36 @@ app.post('/api/action', async (req, res) => {
         case 'buy': // Магазин за TC
             const item = payload.id;
             if (item === 'repair' && u.b >= 50) { u.b -= 50; u.dur = 100; msg = "Починено!"; }
-            if (item === 'energy' && u.b >= 50) { u.b -= 50; u.energy = 100; msg = "Заряжен!"; }
+            if (item === 'energy' && u.b >= 50) { u.b -= 50; u.energy = maxEnergy; msg = "Заряжен!"; }
             if (item === 'myakish' && u.b >= 100) { u.b -= 100; u.buffs.myakish += 10; msg = "Куплено!"; }
+            
+            // --- ТОВАРЫ ЗА TON (Обычно обрабатываются через платежный шлюз, но добавляем в логику) ---
+            if (item === 'vip_7') { 
+                // Здесь будет логика проверки оплаты 2 TON
+                u.buffs.vip = now + (7 * 24 * 60 * 60 * 1000); 
+                u.energy = 100; // Сразу даем бонус
+                msg = "VIP статус активирован на 7 дней!"; 
+            }
+            if (item === 'infinity_energy') { 
+                // Здесь будет логика проверки оплаты 5 TON
+                u.energy = 999; // Условно бесконечная на сессию
+                msg = "Бесконечная энергия активирована!"; 
+            }
             break;
 
         case 'get_daily':
             if (now - u.lastBonus < 86400000) { msg = "Еще не время!"; }
             else {
                 const p = 50 + Math.floor(Math.random()*50);
-                u.b += p; u.energy = 100; u.lastBonus = now;
+                u.b += p; u.energy = maxEnergy; u.lastBonus = now;
                 msg = `Бонус ${p} TC!`;
             }
             break;
     }
 
     saveData();
-    res.json({ ...u, msg, catchData, jackpot, events: serverEvents });
+    // Отправляем доп. инфо о лимитах, чтобы фронтенд знал, что показывать
+    res.json({ ...u, maxEnergy, withdrawLimit: currentWithdrawLimit, withdrawalTime, msg, catchData, jackpot, events: serverEvents });
 });
 
-app.listen(PORT, () => console.log(`[OK] Tamacoin Monolith 4.2.0 на порту ${PORT}`));
+app.listen(PORT, () => console.log(`[OK] Tamacoin Monolith 4.2.1 на порту ${PORT}`));
