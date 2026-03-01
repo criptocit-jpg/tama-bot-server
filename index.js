@@ -14,6 +14,16 @@ const DATA_FILE = './users.json';
 const BOT_TOKEN = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg';
 const ADMIN_ID = '7883085758'; 
 
+// ЦЕНЫ В TON ДЛЯ МАГАЗИНА
+const PRICES_TON = {
+    'myakish_100': 0.5,
+    'energy_boost': 0.2,
+    'hope_access': 1.0,
+    'poacher_kit': 2.0,
+    'titan_rod': 3.5,
+    'vip_30': 10.0
+};
+
 let users = {};
 let logs = ["Сервер 5.0.0: GOD MODE активирован!"];
 let serverEvents = ["Админ-панель запущена", "Озеро Надежды активно!"];
@@ -71,6 +81,20 @@ setInterval(() => {
     saveData();
 }, 60000);
 
+// Функция начисления (Ювелирная работа)
+function applyItem(u, item) {
+    const now = Date.now();
+    if (item === 'energy_boost') { 
+        u.energy = (u.buffs.vip > now) ? 100 : 50; 
+        u.buffs.regenX2 = now + 3600000;
+    }
+    if (item === 'myakish_100') u.buffs.myakish += 100;
+    if (item === 'hope_access') u.buffs.hope = Math.max(now, u.buffs.hope || 0) + (3 * 24 * 60 * 60 * 1000);
+    if (item === 'poacher_kit') u.buffs.poacher = now + (24 * 60 * 60 * 1000);
+    if (item === 'titan_rod') u.buffs.titan = now + (7 * 24 * 60 * 60 * 1000);
+    if (item === 'vip_30') u.buffs.vip = now + (30 * 24 * 60 * 60 * 1000);
+}
+
 // --- API ---
 app.post('/api/action', async (req, res) => {
     const { userId, userName, action, payload } = req.body;
@@ -82,7 +106,7 @@ app.post('/api/action', async (req, res) => {
         users[userId] = {
             id: userId, n: userName || "Рыбак", b: 150, fish: 0, 
             energy: 50, dur: 100, total: 0, lastBonus: 0, lastUpdate: now,
-            buffs: { titan: false, poacher: 0, hope: 0, vip: 0, myakish: 0 },
+            buffs: { titan: false, poacher: 0, hope: 0, vip: 0, myakish: 0, regenX2: 0 },
             stats: { withdrawLimit: 30000, priority: false },
             isBanned: false
         };
@@ -97,12 +121,13 @@ app.post('/api/action', async (req, res) => {
     const isVip = u.buffs.vip > now;
     const maxEnergy = isVip ? 100 : 50;
     const currentWithdrawLimit = isVip ? 10000 : 30000;
-    const withdrawalTime = isVip ? "1 час" : "24 часа";
 
     // Регенерация
     const passed = now - u.lastUpdate;
     if (passed > 300000) { 
-        u.energy = Math.min(maxEnergy, u.energy + Math.floor(passed / 300000)); 
+        let reg = Math.floor(passed / 300000);
+        if (u.buffs.regenX2 > now) reg *= 2;
+        u.energy = Math.min(maxEnergy, u.energy + reg); 
         u.lastUpdate = now; 
     }
 
@@ -114,12 +139,12 @@ app.post('/api/action', async (req, res) => {
         case 'cast':
             const lake = payload.lake || 'normal';
             if (u.energy < 2) { msg = "Нет энергии!"; break; }
-            if (u.dur <= 0 && !u.buffs.titan) { msg = "Почини удочку!"; break; }
+            if (u.dur <= 0 && (!u.buffs.titan || u.buffs.titan < now)) { msg = "Почини удочку!"; break; }
             if (lake === 'hope' && (!u.buffs.hope || u.buffs.hope < now)) {
                 msg = "Купи доступ к Озеру Надежды!"; break;
             }
             u.energy -= 2;
-            if (!u.buffs.titan) u.dur = Math.max(0, u.dur - 1);
+            if (!u.buffs.titan || u.buffs.titan < now) u.dur = Math.max(0, u.dur - 1);
             u.total++;
             let rand = Math.random() * 100;
             if (rand < 5 && (!u.buffs.myakish || u.buffs.myakish <= 0)) {
@@ -130,17 +155,12 @@ app.post('/api/action', async (req, res) => {
                 u.fish += weight;
                 if(u.buffs.myakish > 0) u.buffs.myakish--;
                 if (lake === 'hope') {
-                    let carpChance = (u.buffs.poacher > now) ? 0.5 : 0.01;
+                    let carpChance = (u.buffs.poacher > now) ? 2.5 : 0.5;
                     if (globalState.weeklyCarpCaught < 10 && (Math.random() * 100) < carpChance) {
-                        const carpTC = 5000; 
-                        u.fish += (carpTC / SELL_PRICE);
+                        u.fish += (5000 / SELL_PRICE);
                         catchData = { type: "ЗОЛОТОЙ КАРП! 🏆", w: "5000 TC (эквив.)" };
                         globalState.weeklyCarpCaught++;
                         addLog(`${u.n} выловил КАРПА!`);
-                    } else if (Math.random() < 0.03) {
-                        const walletTC = 100 + Math.floor(Math.random() * 201);
-                        u.b += walletTC;
-                        catchData = { type: "Забытый кошелек 💰", w: walletTC + " TC" };
                     }
                 }
             }
@@ -158,10 +178,17 @@ app.post('/api/action', async (req, res) => {
 
         case 'buy':
             const item = payload.id;
+            const tPrice = PRICES_TON[item];
             if (item === 'repair' && u.b >= 50) { u.b -= 50; u.dur = 100; msg = "Починено!"; }
-            if (item === 'energy' && u.b >= 50) { u.b -= 50; u.energy = maxEnergy; msg = "Заряжен!"; }
-            if (item === 'myakish' && u.b >= 100) { u.b -= 100; u.buffs.myakish += 10; msg = "Куплено!"; }
-            if (item === 'vip_7') { u.buffs.vip = now + (7 * 24 * 60 * 60 * 1000); u.energy = 100; msg = "VIP активен!"; }
+            else if (tPrice) {
+                if (userId === ADMIN_ID) {
+                    applyItem(u, item);
+                    msg = `АДМИН: ${item} начислен!`;
+                } else {
+                    msg = `Счет на ${tPrice} TON отправлен в ЛС бота!`;
+                    sendTgMessage(userId, `🛍 Оплата заказа: ${item}\n💰 Сумма: ${tPrice} TON\n🏦 Кошелек: [ВАШ_АДРЕС]`);
+                }
+            } else { msg = "Не хватает TC или товар не за TON!"; }
             break;
 
         case 'get_daily':
@@ -174,25 +201,19 @@ app.post('/api/action', async (req, res) => {
             break;
 
         case 'withdraw_request':
-            const amount = parseInt(payload.amount);
-            if (u.b < amount || amount < 500) { msg = "Ошибка суммы!"; }
+            const am = parseInt(payload.amount);
+            if (u.b < am || am < 500) { msg = "Ошибка суммы!"; }
             else {
-                u.b -= amount;
-                withdrawRequests.push({ 
-                    reqId: Date.now(), userId, n: u.n, amount, status: 'pending', date: new Date().toLocaleString() 
-                });
+                u.b -= am;
+                withdrawRequests.push({ reqId: Date.now(), userId, n: u.n, amount: am, status: 'pending', date: new Date().toLocaleString() });
                 msg = "Заявка отправлена админу!";
             }
             break;
 
         case 'get_top':
-            const topPlayers = Object.values(users)
-                .sort((a, b) => b.b - a.b)
-                .slice(0, 10)
-                .map(p => ({ id: p.id, n: p.n, b: p.b }));
+            const topPlayers = Object.values(users).sort((a, b) => b.b - a.b).slice(0, 10).map(p => ({ id: p.id, n: p.n, b: p.b }));
             return res.json({ topPlayers });
 
-        // --- ADMIN GOD MODE ---
         case 'admin_get_all':
             if (userId !== ADMIN_ID) return res.status(403).end();
             res.json({ allUsers: Object.values(users), withdrawRequests, jackpot });
@@ -210,17 +231,15 @@ app.post('/api/action', async (req, res) => {
 
         case 'admin_confirm_payout':
             if (userId !== ADMIN_ID) return res.status(403).end();
-            const reqIdx = withdrawRequests.findIndex(r => r.reqId === payload.reqId);
-            if (reqIdx > -1) {
-                const r = withdrawRequests[reqIdx];
-                r.status = 'paid';
-                sendTgMessage(r.userId, `✅ Ваша выплата на сумму ${r.amount} TC одобрена и отправлена!`);
-                withdrawRequests.splice(reqIdx, 1); // Убираем из списка после оплаты
-                msg = "Выплата подтверждена!";
+            const rIdx = withdrawRequests.findIndex(r => r.reqId === payload.reqId);
+            if (rIdx > -1) {
+                const r = withdrawRequests[rIdx];
+                sendTgMessage(r.userId, `✅ Выплата ${r.amount} TC отправлена!`);
+                withdrawRequests.splice(rIdx, 1);
+                msg = "Оплата подтверждена!";
             }
             break;
     }
-
     saveData();
     res.json({ ...u, maxEnergy, withdrawLimit: currentWithdrawLimit, msg, catchData, jackpot, events: serverEvents });
 });
