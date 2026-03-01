@@ -25,11 +25,11 @@ const PRICES_TON = {
 };
 
 let users = {};
-let logs = ["Сервер 5.1.0: ВОССТАНОВЛЕНИЕ ПОЛНОГО КОДА ЗАВЕРШЕНО"];
-let serverEvents = ["Админ-панель активна", "Система TON Connect интегрирована"];
+let logs = ["Сервер 5.2.0: ГИБРИДНЫЙ МОНОЛИТ АКТИВИРОВАН"];
+let serverEvents = ["Админ-панель запущена", "Озеро Надежды активно!", "Система автооплаты TON Connect интегрирована"];
 let jackpot = { pool: 1000, lastWinner: "Никто" };
 let globalState = { weeklyCarpCaught: 0, lastReset: Date.now() };
-let withdrawRequests = []; 
+let withdrawRequests = []; // Очередь на вывод
 
 const MIN_JACKPOT = 1000;
 const SELL_PRICE = 2; 
@@ -47,7 +47,6 @@ function loadData() {
         } catch(e) { console.error("Ошибка загрузки:", e); }
     }
 }
-
 function saveData() { 
     const dataToSave = { users, jackpot, globalState, withdrawRequests, lastSave: Date.now() };
     fs.writeFileSync(DATA_FILE, JSON.stringify(dataToSave, null, 2)); 
@@ -180,25 +179,23 @@ app.post('/api/action', async (req, res) => {
         case 'buy':
             const item = payload.id;
             const tPrice = PRICES_TON[item];
-            
-            // Логика автооплаты через фронтенд
+
+            // ВНЕДРЕНИЕ: Логика подтверждения от TON Connect
             if (payload.tonConfirmed) {
                 applyItem(u, item);
-                msg = `Успешно приобретено: ${item}!`;
-                addLog(`${u.n} купил ${item} через TON`);
+                msg = `ОПЛАТА TON ПРИНЯТА! ${item} начислен!`;
+                addLog(`${u.n} купил ${item} через TON Connect`);
                 break;
             }
 
-            if (item === 'repair' && u.b >= 50) { 
-                u.b -= 50; u.dur = 100; msg = "Починено!"; 
-            } else if (tPrice) {
+            if (item === 'repair' && u.b >= 50) { u.b -= 50; u.dur = 100; msg = "Починено!"; }
+            else if (tPrice) {
                 if (userId === ADMIN_ID) {
                     applyItem(u, item);
                     msg = `АДМИН: ${item} начислен!`;
                 } else {
-                    // Старая логика счета в ЛС (как резерв)
                     msg = `Счет на ${tPrice} TON отправлен в ЛС бота!`;
-                    sendTgMessage(userId, `🛍 Оплата заказа: ${item}\n💰 Сумма: ${tPrice} TON`);
+                    sendTgMessage(userId, `🛍 Оплата заказа: ${item}\n💰 Сумма: ${tPrice} TON\n🏦 Кошелек: [ВАШ_АДРЕС]`);
                 }
             } else { msg = "Не хватает TC или товар не за TON!"; }
             break;
@@ -253,7 +250,8 @@ app.post('/api/action', async (req, res) => {
             break;
     }
     saveData();
+    // ВНЕДРЕНИЕ: Отправляем globalState для вкладки ИНФО
     res.json({ ...u, maxEnergy, withdrawLimit: currentWithdrawLimit, msg, catchData, jackpot, events: serverEvents, globalState });
 });
 
-app.listen(PORT, () => console.log(`[GOD MODE] Tamacoin 5.1.0 MONOLITH на порту ${PORT}`));
+app.listen(PORT, () => console.log(`[GOD MODE] Tamacoin 5.2.0 на порту ${PORT}`));
