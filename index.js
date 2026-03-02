@@ -14,12 +14,18 @@ const DATA_FILE = './users.json';
 const BOT_TOKEN = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg';
 const ADMIN_ID = '7883085758'; 
 
-// ЦЕНЫ В TON (ТВОИ УСЛОВИЯ)
+// ОБНОВЛЕННЫЕ ЦЕНЫ TON (ТВОИ УСЛОВИЯ)
 const PRICES_TON = {
     'vip_bait': 1.0,        // Приманка (7 дней, x3 вес / x6 Золотой час)
     'titan_rod_7': 1.0,     // Титановая удочка (7 дней, нет поломок и срывов)
     'hope_lake_7': 2.0,     // Озеро Надежды (7 дней, Карпы + Кошельки)
-    'vip_status_14': 3.0    // VIP Статус (14 дней, лимит 10к, безлимит энергия, иконка)
+    'vip_status_14': 3.0,   // VIP Статус (14 дней, лимит 10к, безлимит энергия, иконка)
+    'myakish_100': 0.5,
+    'energy_boost': 0.2,
+    'hope_access': 1.0,
+    'poacher_kit': 2.0,
+    'titan_rod': 3.5,
+    'vip_30': 10.0
 };
 
 let users = {};
@@ -90,9 +96,15 @@ function applyItem(u, item) {
     if (item === 'hope_lake_7') u.buffs.hope = now + week;
     if (item === 'vip_status_14') u.buffs.vip = now + fortnight;
     
-    if (item === 'myakish') u.buffs.myakish += 10;
-    if (item === 'energy') u.energy = (u.buffs.vip > now) ? 100 : 50;
-    if (item === 'repair') { u.dur = 100; }
+    if (item === 'energy_boost') { 
+        u.energy = (u.buffs.vip > now) ? 100 : 50; 
+        u.buffs.regenX2 = now + 3600000;
+    }
+    if (item === 'myakish_100') u.buffs.myakish += 100;
+    if (item === 'hope_access') u.buffs.hope = Math.max(now, u.buffs.hope || 0) + (3 * 24 * 60 * 60 * 1000);
+    if (item === 'poacher_kit') u.buffs.poacher = now + (24 * 60 * 60 * 1000);
+    if (item === 'titan_rod') u.buffs.titan = now + week;
+    if (item === 'vip_30') u.buffs.vip = now + (30 * 24 * 60 * 60 * 1000);
 }
 
 // --- API ---
@@ -101,13 +113,13 @@ app.post('/api/action', async (req, res) => {
     const now = Date.now();
     if (!userId) return res.status(400).json({ error: "No ID" });
 
-    // Инициализация
+    // Инициализация юзера
     if (!users[userId]) {
         users[userId] = {
             id: userId, n: userName || "Рыбак", b: 150, fish: 0, 
             energy: 50, dur: 100, total: 0, lastBonus: 0, lastUpdate: now,
-            buffs: { titan: 0, hope: 0, vip: 0, bait: 0, myakish: 0 },
-            stats: { boxes: 0, castsAsRef: 0, lastRest: 0 },
+            buffs: { titan: 0, hope: 0, vip: 0, bait: 0, myakish: 0, poacher: 0, regenX2: 0 },
+            stats: { boxes: 0, castsAsRef: 0, lastRest: 0, withdrawLimit: 30000 },
             referrer: payload?.refBy || null,
             isBanned: false
         };
@@ -124,7 +136,9 @@ app.post('/api/action', async (req, res) => {
     // Регенерация
     const passed = now - u.lastUpdate;
     if (passed > 300000 && !isVip) { 
-        u.energy = Math.min(maxEnergy, u.energy + Math.floor(passed / 300000)); 
+        let reg = Math.floor(passed / 300000);
+        if (u.buffs.regenX2 > now) reg *= 2;
+        u.energy = Math.min(maxEnergy, u.energy + reg); 
         u.lastUpdate = now; 
     } else if (isVip) { u.energy = 100; }
 
@@ -137,11 +151,11 @@ app.post('/api/action', async (req, res) => {
             const lake = payload.lake || 'normal';
             if (!isVip && u.energy < 2) { msg = "Нет энергии!"; break; }
             if (!hasTitan && u.dur <= 0) { msg = "Почини удочку!"; break; }
-            if (lake === 'hope' && u.buffs.hope < now) { msg = "Доступ закрыт!"; break; }
+            if (lake === 'hope' && u.buffs.hope < now) { msg = "Купи доступ к Озеру Надежды!"; break; }
             
             // VIP Отдых 30 мин каждые 100 забросов
             if (isVip && u.total > 0 && u.total % 100 === 0) {
-                if (now - u.stats.lastRest < 1800000) { msg = "Отдых 30 мин!"; break; }
+                if (now - u.stats.lastRest < 1800000) { msg = "Отдых 30 мин (VIP)!"; break; }
                 u.stats.lastRest = now;
             }
 
@@ -150,74 +164,113 @@ app.post('/api/action', async (req, res) => {
             u.total++;
             u.stats.castsAsRef++;
 
-            // Коробка Удачи за реферала
+            // Коробка Удачи за реферала (50 забросов)
             if (u.referrer && u.stats.castsAsRef === 50) {
                 if (users[u.referrer]) {
                     users[u.referrer].stats.boxes++;
-                    sendTgMessage(u.referrer, "🎁 Твой реферал активен! Ты получил Коробку Удачи!");
+                    sendTgMessage(u.referrer, "🎁 Твой реферал сделал 50 забросов! Ты получил Коробку Удачи!");
                 }
             }
 
             let weight = (Math.random() * 2 + 0.5);
-            // Приманка x3 / x6
+            // VIP Приманка x3 / x6 в золотой час
             const isGoldHour = new Date().getMinutes() < 10; 
             if (u.buffs.bait > now) weight *= isGoldHour ? 6 : 3;
 
-            catchData = { type: "Рыба", w: weight.toFixed(2) + " кг" };
-            u.fish += weight;
-
-            if (lake === 'hope') {
-                if (globalState.weeklyCarpCaught < 10 && Math.random() < 0.02) {
-                    u.fish += (5000 / SELL_PRICE);
-                    catchData = { type: "ЗОЛОТОЙ КАРП! 🏆", w: "5000 TC" };
-                    globalState.weeklyCarpCaught++;
-                } else if (Math.random() < 0.15) {
-                    const bonus = 100 + Math.floor(Math.random()*200);
-                    u.b += bonus;
-                    catchData = { type: "Кошелек! 💰", w: `${bonus} TC` };
+            // Логика срыва
+            let rand = Math.random() * 100;
+            if (!hasTitan && rand < 5 && u.buffs.myakish <= 0) {
+                msg = "Срыв! 🐟"; 
+            } else {
+                catchData = { type: "Обычная рыба", w: weight.toFixed(2) + " кг" };
+                u.fish += weight;
+                if(u.buffs.myakish > 0) u.buffs.myakish--;
+                
+                if (lake === 'hope') {
+                    if (globalState.weeklyCarpCaught < 10 && Math.random() < 0.02) {
+                        u.fish += (5000 / SELL_PRICE);
+                        catchData = { type: "ЗОЛОТОЙ КАРП! 🏆", w: "5000 TC" };
+                        globalState.weeklyCarpCaught++;
+                        addLog(`${u.n} выловил КАРПА!`);
+                    } else if (Math.random() < 0.15) {
+                        const bonus = 100 + Math.floor(Math.random()*200);
+                        u.b += bonus;
+                        catchData = { type: "Кошелек! 💰", w: `${bonus} TC` };
+                    }
                 }
             }
             break;
 
         case 'sell':
-            const inc = Math.floor(u.fish * SELL_PRICE);
-            const tax = Math.floor(inc * TAX_RATE);
+            if (u.fish <= 0) { msg = "Садок пуст!"; break; }
+            const income = Math.floor(u.fish * SELL_PRICE);
+            const tax = Math.floor(income * TAX_RATE);
             jackpot.pool += tax;
-            u.b += (inc - tax);
+            u.b += (income - tax);
             u.fish = 0;
-            msg = `Продано! +${inc - tax} TC`;
+            msg = `Продано! +${income - tax} TC (Налог ${tax})`;
             break;
 
         case 'open_box':
             if (u.stats.boxes <= 0) return res.json({ error: "Нет коробок" });
             u.stats.boxes--;
             const rnd = Math.random();
-            let rid = 'myakish'; let rn = "Мякиш";
-            if (rnd > 0.9) { rid = 'vip_status_14'; rn = "VIP СТАТУС"; }
-            else if (rnd > 0.6) { rid = 'titan_rod_7'; rn = "Титановая удочка"; }
+            let rid = 'myakish_100'; let rn = "Хлебный мякиш";
+            if (rnd > 0.95) { rid = 'vip_status_14'; rn = "VIP СТАТУС (14д)"; }
+            else if (rnd > 0.8) { rid = 'titan_rod_7'; rn = "Титановая удочка (7д)"; }
+            else if (rnd > 0.6) { rid = 'vip_bait'; rn = "VIP Приманка (7д)"; }
             applyItem(u, rid);
             boxReward = { id: rid, n: rn };
-            msg = `Выпало: ${rn}!`;
+            msg = `Из коробки выпало: ${rn}!`;
             break;
 
         case 'buy':
             const item = payload.id;
-            if (payload.tonConfirmed || userId === ADMIN_ID) {
+            const tPrice = PRICES_TON[item];
+            if (payload.tonConfirmed) {
                 applyItem(u, item);
-                msg = "Успешно!";
-            } else if (item === 'repair' && u.b >= 50) {
-                u.b -= 50; u.dur = 100; msg = "Починено!";
+                msg = `ОПЛАТА TON ПРИНЯТА! ${item} начислен!`;
+                addLog(`${u.n} купил ${item} через TON Connect`);
+                break;
+            }
+            if (item === 'repair' && u.b >= 50) { u.b -= 50; u.dur = 100; msg = "Починено!"; }
+            else if (tPrice) {
+                if (userId === ADMIN_ID) { applyItem(u, item); msg = `АДМИН: ${item} начислен!`; }
+                else {
+                    msg = `Счет на ${tPrice} TON отправлен в ЛС!`;
+                    sendTgMessage(userId, `🛍 Оплата заказа: ${item}\n💰 Сумма: ${tPrice} TON\n🏦 MEMO: FISH_${userId}_${item}`);
+                }
             }
             break;
 
         case 'get_daily':
-            if (now - u.lastBonus < 86400000) { msg = "Рано!"; }
+            if (now - u.lastBonus < 86400000) { msg = "Еще не время!"; }
             else { u.b += 100; u.energy = maxEnergy; u.lastBonus = now; msg = "Бонус 100 TC!"; }
             break;
-            
+
+        case 'withdraw_request':
+            const am = parseInt(payload.amount);
+            if (u.b < am || am < 500) { msg = "Ошибка суммы!"; }
+            else {
+                u.b -= am;
+                withdrawRequests.push({ reqId: Date.now(), userId, n: u.n, amount: am, status: 'pending', date: new Date().toLocaleString() });
+                msg = "Заявка отправлена!";
+            }
+            break;
+
         case 'get_top':
             const top = Object.values(users).sort((a,b) => b.b - a.b).slice(0,10).map(p => ({id: p.id, n: p.n, b: p.b}));
             return res.json({ topPlayers: top });
+
+        case 'admin_user_op':
+            if (userId !== ADMIN_ID) return res.status(403).end();
+            const target = users[payload.targetId];
+            if (!target) return res.json({ error: "Not found" });
+            if (payload.op === 'add_money') target.b += parseInt(payload.val);
+            if (payload.op === 'set_vip') target.buffs.vip = now + (payload.val * 86400000);
+            if (payload.op === 'ban') target.isBanned = !target.isBanned;
+            msg = "OK!";
+            break;
     }
     saveData();
     res.json({ ...u, maxEnergy, withdrawLimit: currentWithdrawLimit, msg, catchData, boxReward, jackpot, globalState });
