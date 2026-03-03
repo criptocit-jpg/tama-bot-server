@@ -14,7 +14,6 @@ const DATA_FILE = './users.json';
 const BOT_TOKEN = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg';
 const ADMIN_ID = '7883085758'; 
 
-// ОБНОВЛЕННЫЕ ЦЕНЫ TON (ТВОИ УСЛОВИЯ)
 const PRICES_TON = {
     'vip_bait': 1.0,        // Приманка (7 дней, x3 вес / x6 Золотой час)
     'titan_rod_7': 1.0,     // Титановая удочка (7 дней, нет поломок и срывов)
@@ -29,8 +28,8 @@ const PRICES_TON = {
 };
 
 let users = {};
-let logs = ["Сервер 5.5.0: ГИБРИДНЫЙ МОНОЛИТ АКТИВИРОВАН (LUCKY BOX + VIP)"];
-let serverEvents = ["Админ-панель запущена", "Золотые карпы: 10 шт/нед", "Коробки удачи активны"];
+let logs = ["Сервер 5.6.0: МОНОЛИТ ВОССТАНОВЛЕН (АДМИНКА + VIP)"];
+let serverEvents = ["Админ-панель: Активна", "Золотые карпы: 10 шт/нед", "Система Lucky Box: OK"];
 let jackpot = { pool: 1000, lastWinner: "Никто" };
 let globalState = { weeklyCarpCaught: 0, lastReset: Date.now() };
 let withdrawRequests = []; 
@@ -74,7 +73,6 @@ async function sendTgMessage(chatId, text) {
     } catch (e) { console.error("TG Send Error:", e.message); }
 }
 
-// --- ЕЖЕНЕДЕЛЬНЫЙ СБРОС ---
 setInterval(() => {
     const now = Date.now();
     if (now - globalState.lastReset > 604800000) {
@@ -85,7 +83,6 @@ setInterval(() => {
     saveData();
 }, 60000);
 
-// Функция начисления (Внедрение твоих условий)
 function applyItem(u, item) {
     const now = Date.now();
     const week = 7 * 24 * 60 * 60 * 1000;
@@ -113,13 +110,12 @@ app.post('/api/action', async (req, res) => {
     const now = Date.now();
     if (!userId) return res.status(400).json({ error: "No ID" });
 
-    // Инициализация юзера
     if (!users[userId]) {
         users[userId] = {
             id: userId, n: userName || "Рыбак", b: 150, fish: 0, 
             energy: 50, dur: 100, total: 0, lastBonus: 0, lastUpdate: now,
             buffs: { titan: 0, hope: 0, vip: 0, bait: 0, myakish: 0, poacher: 0, regenX2: 0 },
-            stats: { boxes: 0, castsAsRef: 0, lastRest: 0, withdrawLimit: 30000 },
+            stats: { boxes: 0, castsAsRef: 0, lastRest: 0 },
             referrer: payload?.refBy || null,
             isBanned: false
         };
@@ -133,7 +129,6 @@ app.post('/api/action', async (req, res) => {
     const maxEnergy = isVip ? 100 : 50;
     const currentWithdrawLimit = isVip ? 10000 : 30000;
 
-    // Регенерация
     const passed = now - u.lastUpdate;
     if (passed > 300000 && !isVip) { 
         let reg = Math.floor(passed / 300000);
@@ -151,9 +146,8 @@ app.post('/api/action', async (req, res) => {
             const lake = payload.lake || 'normal';
             if (!isVip && u.energy < 2) { msg = "Нет энергии!"; break; }
             if (!hasTitan && u.dur <= 0) { msg = "Почини удочку!"; break; }
-            if (lake === 'hope' && u.buffs.hope < now) { msg = "Купи доступ к Озеру Надежды!"; break; }
+            if (lake === 'hope' && u.buffs.hope < now) { msg = "Доступ к Озеру закрыт!"; break; }
             
-            // VIP Отдых 30 мин каждые 100 забросов
             if (isVip && u.total > 0 && u.total % 100 === 0) {
                 if (now - u.stats.lastRest < 1800000) { msg = "Отдых 30 мин (VIP)!"; break; }
                 u.stats.lastRest = now;
@@ -164,25 +158,22 @@ app.post('/api/action', async (req, res) => {
             u.total++;
             u.stats.castsAsRef++;
 
-            // Коробка Удачи за реферала (50 забросов)
             if (u.referrer && u.stats.castsAsRef === 50) {
                 if (users[u.referrer]) {
                     users[u.referrer].stats.boxes++;
-                    sendTgMessage(u.referrer, "🎁 Твой реферал сделал 50 забросов! Ты получил Коробку Удачи!");
+                    sendTgMessage(u.referrer, "🎁 Реферал активен! Получена Коробка Удачи!");
                 }
             }
 
             let weight = (Math.random() * 2 + 0.5);
-            // VIP Приманка x3 / x6 в золотой час
             const isGoldHour = new Date().getMinutes() < 10; 
             if (u.buffs.bait > now) weight *= isGoldHour ? 6 : 3;
 
-            // Логика срыва
             let rand = Math.random() * 100;
             if (!hasTitan && rand < 5 && u.buffs.myakish <= 0) {
                 msg = "Срыв! 🐟"; 
             } else {
-                catchData = { type: "Обычная рыба", w: weight.toFixed(2) + " кг" };
+                catchData = { type: "Рыба", w: weight.toFixed(2) + " кг" };
                 u.fish += weight;
                 if(u.buffs.myakish > 0) u.buffs.myakish--;
                 
@@ -208,20 +199,20 @@ app.post('/api/action', async (req, res) => {
             jackpot.pool += tax;
             u.b += (income - tax);
             u.fish = 0;
-            msg = `Продано! +${income - tax} TC (Налог ${tax})`;
+            msg = `Продано! +${income - tax} TC`;
             break;
 
         case 'open_box':
             if (u.stats.boxes <= 0) return res.json({ error: "Нет коробок" });
             u.stats.boxes--;
             const rnd = Math.random();
-            let rid = 'myakish_100'; let rn = "Хлебный мякиш";
+            let rid = 'myakish_100'; let rn = "Мякиш";
             if (rnd > 0.95) { rid = 'vip_status_14'; rn = "VIP СТАТУС (14д)"; }
             else if (rnd > 0.8) { rid = 'titan_rod_7'; rn = "Титановая удочка (7д)"; }
             else if (rnd > 0.6) { rid = 'vip_bait'; rn = "VIP Приманка (7д)"; }
             applyItem(u, rid);
             boxReward = { id: rid, n: rn };
-            msg = `Из коробки выпало: ${rn}!`;
+            msg = `Выпало: ${rn}!`;
             break;
 
         case 'buy':
@@ -229,16 +220,16 @@ app.post('/api/action', async (req, res) => {
             const tPrice = PRICES_TON[item];
             if (payload.tonConfirmed) {
                 applyItem(u, item);
-                msg = `ОПЛАТА TON ПРИНЯТА! ${item} начислен!`;
-                addLog(`${u.n} купил ${item} через TON Connect`);
+                msg = `ОПЛАТА ПРИНЯТА! ${item} начислен!`;
+                addLog(`${u.n} купил ${item}`);
                 break;
             }
             if (item === 'repair' && u.b >= 50) { u.b -= 50; u.dur = 100; msg = "Починено!"; }
             else if (tPrice) {
-                if (userId === ADMIN_ID) { applyItem(u, item); msg = `АДМИН: ${item} начислен!`; }
+                if (userId === ADMIN_ID) { applyItem(u, item); msg = `АДМИН: Выдано!`; }
                 else {
                     msg = `Счет на ${tPrice} TON отправлен в ЛС!`;
-                    sendTgMessage(userId, `🛍 Оплата заказа: ${item}\n💰 Сумма: ${tPrice} TON\n🏦 MEMO: FISH_${userId}_${item}`);
+                    sendTgMessage(userId, `🛍 Заказ: ${item}\n💰 Сумма: ${tPrice} TON\n🏦 MEMO: FISH_${userId}_${item}`);
                 }
             }
             break;
@@ -262,6 +253,12 @@ app.post('/api/action', async (req, res) => {
             const top = Object.values(users).sort((a,b) => b.b - a.b).slice(0,10).map(p => ({id: p.id, n: p.n, b: p.b}));
             return res.json({ topPlayers: top });
 
+        // --- ВОССТАНОВЛЕННАЯ АДМИНКА ---
+        case 'admin_get_all':
+            if (userId !== ADMIN_ID) return res.status(403).end();
+            res.json({ allUsers: Object.values(users), withdrawRequests, jackpot, globalState });
+            return;
+
         case 'admin_user_op':
             if (userId !== ADMIN_ID) return res.status(403).end();
             const target = users[payload.targetId];
@@ -269,11 +266,22 @@ app.post('/api/action', async (req, res) => {
             if (payload.op === 'add_money') target.b += parseInt(payload.val);
             if (payload.op === 'set_vip') target.buffs.vip = now + (payload.val * 86400000);
             if (payload.op === 'ban') target.isBanned = !target.isBanned;
-            msg = "OK!";
+            msg = "Действие выполнено!";
+            break;
+
+        case 'admin_confirm_payout':
+            if (userId !== ADMIN_ID) return res.status(403).end();
+            const rIdx = withdrawRequests.findIndex(r => r.reqId === payload.reqId);
+            if (rIdx > -1) {
+                const r = withdrawRequests[rIdx];
+                sendTgMessage(r.userId, `✅ Выплата ${r.amount} TC отправлена!`);
+                withdrawRequests.splice(rIdx, 1);
+                msg = "Оплата подтверждена!";
+            }
             break;
     }
     saveData();
-    res.json({ ...u, maxEnergy, withdrawLimit: currentWithdrawLimit, msg, catchData, boxReward, jackpot, globalState });
+    res.json({ ...u, maxEnergy, withdrawLimit: currentWithdrawLimit, msg, catchData, boxReward, jackpot, globalState, events: serverEvents });
 });
 
-app.listen(PORT, () => console.log(`TAMAC FISH 5.5.0`));
+app.listen(PORT, () => console.log(`TAMAC FISH 5.6.0`));
