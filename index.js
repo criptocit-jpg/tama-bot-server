@@ -28,8 +28,8 @@ const PRICES_TON = {
 };
 
 let users = {};
-let logs = ["Сервер 5.6.0: МОНОЛИТ ВОССТАНОВЛЕН (АДМИНКА + VIP)"];
-let serverEvents = ["Админ-панель: Активна", "Золотые карпы: 10 шт/нед", "Система Lucky Box: OK"];
+let logs = ["Сервер 5.7.0: МОНОЛИТ ВОССТАНОВЛЕН (XP + CACHE)"];
+let serverEvents = ["Админ-панель: Активна", "Золотые карпы: 10 шт/нед", "Система XP: OK"];
 let jackpot = { pool: 1000, lastWinner: "Никто" };
 let globalState = { weeklyCarpCaught: 0, lastReset: Date.now() };
 let withdrawRequests = []; 
@@ -62,6 +62,12 @@ function addLog(m) {
     serverEvents.unshift(m);
     if(logs.length > 20) logs.pop();
     if(serverEvents.length > 15) serverEvents.pop();
+}
+
+// [НОВОЕ] Формула уровня
+function calcLevel(u) {
+    if(!u.xp) u.xp = 0;
+    u.level = Math.floor(u.xp / 100) + 1;
 }
 
 async function sendTgMessage(chatId, text) {
@@ -113,6 +119,7 @@ app.post('/api/action', async (req, res) => {
     if (!users[userId]) {
         users[userId] = {
             id: userId, n: userName || "Рыбак", b: 150, fish: 0, 
+            xp: 0, level: 1, // [НОВОЕ]
             energy: 50, dur: 100, total: 0, lastBonus: 0, lastUpdate: now,
             buffs: { titan: 0, hope: 0, vip: 0, bait: 0, myakish: 0, poacher: 0, regenX2: 0 },
             stats: { boxes: 0, castsAsRef: 0, lastRest: 0 },
@@ -122,7 +129,7 @@ app.post('/api/action', async (req, res) => {
     }
 
     const u = users[userId];
-    if (u.isBanned && userId !== ADMIN_ID) return res.status(403).json({ error: "BANNED" });
+    if (u.isBanned && userId.toString() !== ADMIN_ID) return res.status(403).json({ error: "BANNED" });
 
     const isVip = u.buffs.vip > now;
     const hasTitan = u.buffs.titan > now || isVip;
@@ -157,6 +164,10 @@ app.post('/api/action', async (req, res) => {
             if (!hasTitan) u.dur = Math.max(0, u.dur - 1);
             u.total++;
             u.stats.castsAsRef++;
+
+            // [НОВОЕ] Опыт за заброс
+            u.xp = (u.xp || 0) + 5;
+            calcLevel(u);
 
             if (u.referrer && u.stats.castsAsRef === 50) {
                 if (users[u.referrer]) {
@@ -198,6 +209,11 @@ app.post('/api/action', async (req, res) => {
             const tax = Math.floor(income * TAX_RATE);
             jackpot.pool += tax;
             u.b += (income - tax);
+            
+            // [НОВОЕ] Опыт за продажу
+            u.xp = (u.xp || 0) + Math.floor(u.fish * 10);
+            calcLevel(u);
+
             u.fish = 0;
             msg = `Продано! +${income - tax} TC`;
             break;
@@ -226,7 +242,7 @@ app.post('/api/action', async (req, res) => {
             }
             if (item === 'repair' && u.b >= 50) { u.b -= 50; u.dur = 100; msg = "Починено!"; }
             else if (tPrice) {
-                if (userId === ADMIN_ID) { applyItem(u, item); msg = `АДМИН: Выдано!`; }
+                if (userId.toString() === ADMIN_ID) { applyItem(u, item); msg = `АДМИН: Выдано!`; }
                 else {
                     msg = `Счет на ${tPrice} TON отправлен в ЛС!`;
                     sendTgMessage(userId, `🛍 Заказ: ${item}\n💰 Сумма: ${tPrice} TON\n🏦 MEMO: FISH_${userId}_${item}`);
@@ -253,14 +269,13 @@ app.post('/api/action', async (req, res) => {
             const top = Object.values(users).sort((a,b) => b.b - a.b).slice(0,10).map(p => ({id: p.id, n: p.n, b: p.b}));
             return res.json({ topPlayers: top });
 
-        // --- ВОССТАНОВЛЕННАЯ АДМИНКА ---
         case 'admin_get_all':
-            if (userId !== ADMIN_ID) return res.status(403).end();
+            if (userId.toString() !== ADMIN_ID) return res.status(403).end();
             res.json({ allUsers: Object.values(users), withdrawRequests, jackpot, globalState });
             return;
 
         case 'admin_user_op':
-            if (userId !== ADMIN_ID) return res.status(403).end();
+            if (userId.toString() !== ADMIN_ID) return res.status(403).end();
             const target = users[payload.targetId];
             if (!target) return res.json({ error: "Not found" });
             if (payload.op === 'add_money') target.b += parseInt(payload.val);
@@ -270,7 +285,7 @@ app.post('/api/action', async (req, res) => {
             break;
 
         case 'admin_confirm_payout':
-            if (userId !== ADMIN_ID) return res.status(403).end();
+            if (userId.toString() !== ADMIN_ID) return res.status(403).end();
             const rIdx = withdrawRequests.findIndex(r => r.reqId === payload.reqId);
             if (rIdx > -1) {
                 const r = withdrawRequests[rIdx];
@@ -281,7 +296,18 @@ app.post('/api/action', async (req, res) => {
             break;
     }
     saveData();
-    res.json({ ...u, maxEnergy, withdrawLimit: currentWithdrawLimit, msg, catchData, boxReward, jackpot, globalState, events: serverEvents });
+    res.json({ 
+        ...u, 
+        isAdmin: userId.toString() === ADMIN_ID, // [НОВОЕ]
+        maxEnergy, 
+        withdrawLimit: currentWithdrawLimit, 
+        msg, 
+        catchData, 
+        boxReward, 
+        jackpot, 
+        globalState, 
+        events: serverEvents 
+    });
 });
 
-app.listen(PORT, () => console.log(`TAMAC FISH 5.6.0`));
+app.listen(PORT, () => console.log(`TAMAC FISH 5.7.0 MONOLITH`));
