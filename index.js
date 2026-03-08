@@ -10,10 +10,15 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = './users.json';
 
-// --- НАСТРОЙКИ ---
+// ==========================================================================
+// [1] НАСТРОЙКИ АВТОМАТИЗАЦИИ И БЕЗОПАСНОСТИ
+// ==========================================================================
 const BOT_TOKEN = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg';
 const ADMIN_ID = '7883085758'; 
+const MY_TON_WALLET = 'UQAQZE0WB6mmLAAq0XCTlipocPlrqopaxHgXFmOmp-fCFBJh';
+const TONCENTER_API_KEY = '360540e7a910fec0124ef783d85d607d0963e0c26d204b49d3500fc452be5c15';
 
+// Прайс-лист для автоматической сверки платежей
 const PRICES_TON = {
     'vip_bait': 1.0,        // Приманка (7 дней, x3 вес / x6 Золотой час)
     'titan_rod_7': 1.0,     // Титановая удочка (7 дней, нет поломок и срывов)
@@ -27,9 +32,13 @@ const PRICES_TON = {
     'vip_30': 10.0
 };
 
+// ==========================================================================
+// [2] ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ СОСТОЯНИЯ СЕРВЕРА
+// ==========================================================================
 let users = {};
-let logs = ["Сервер 5.8.1: МОНОЛИТ ОБНОВЛЕН (HARD XP BALANCE)"];
-let serverEvents = ["Админ-панель: Активна", "XP Баланс: Жесткий (1 клик = 1 XP)", "Прогрессия: x500"];
+let processedTxs = []; // База данных хэшей транзакций для защиты от дублей
+let logs = ["Сервер 5.9.1: МОНОЛИТ АВТО-ПЛАТЕЖЕЙ ЗАПУЩЕН"];
+let serverEvents = ["Админ-панель: Активна", "Система TON: Автопилот ON", "XP Баланс: Жесткий"];
 let jackpot = { pool: 1000, lastWinner: "Никто" };
 let globalState = { weeklyCarpCaught: 0, lastReset: Date.now() };
 let withdrawRequests = []; 
@@ -38,25 +47,102 @@ const MIN_JACKPOT = 1000;
 const SELL_PRICE = 2; 
 const TAX_RATE = 0.05; 
 
-// --- РАБОТА С ДАННЫМИ ---
+// ==========================================================================
+// [3] СИСТЕМА АВТОМАТИЧЕСКОЙ ПРОВЕРКИ ТРАНЗАКЦИЙ TON
+// ==========================================================================
+async function checkTonPayments() {
+    try {
+        // Запрос последних 10 транзакций через TonCenter API
+        const url = `https://toncenter.com/api/v2/getTransactions?address=${MY_TON_WALLET}&limit=10&to_lt=0&archival=false`;
+        const res = await axios.get(url, { 
+            headers: { 'X-API-Key': TONCENTER_API_KEY } 
+        });
+        
+        if (!res.data || !res.data.ok) return;
+
+        const transactions = res.data.result;
+
+        for (const tx of transactions) {
+            const hash = tx.transaction_id.hash;
+            
+            // Если транзакция уже была обработана ранее — пропускаем
+            if (processedTxs.includes(hash)) continue;
+
+            const inMsg = tx.in_msg;
+            if (!inMsg || !inMsg.message) {
+                processedTxs.push(hash); // Записываем как пустую, чтобы не дергать снова
+                continue;
+            }
+
+            const memo = inMsg.message; // Комментарий к платежу (MEMO)
+            const amount = parseFloat(inMsg.value) / 1000000000; // Конвертация из nanoTON в TON
+
+            // Ожидаемый формат MEMO: FISH_USERID_ITEMID
+            if (memo.startsWith('FISH_')) {
+                const parts = memo.split('_');
+                const uId = parts[1];
+                const itemId = parts[2];
+
+                // Проверяем: существует ли юзер и хватает ли суммы оплаты
+                if (users[uId] && PRICES_TON[itemId] <= (amount + 0.01)) { // Небольшой допуск на комиссии
+                    applyItem(users[uId], itemId);
+                    processedTxs.push(hash);
+                    saveData();
+                    
+                    addLog(`Авто-оплата: ${users[uId].n} купил ${itemId}`);
+                    
+                    // Уведомление игроку в ЛС через Telegram API
+                    await sendTgMessage(uId, `✅ ОПЛАТА ПОДТВЕРЖДЕНА!\n💰 Сумма: ${amount} TON\n📦 Товар: ${itemId}\n\nПриятной игры!`);
+                    
+                    // Уведомление админу (тебе)
+                    await sendTgMessage(ADMIN_ID, `💰 ПРОДАЖА (АВТО): ${users[uId].n} (${uId}) купил ${itemId} за ${amount} TON!`);
+                }
+            }
+            
+            // Добавляем хэш в список обработанных в любом случае
+            processedTxs.push(hash);
+            if (processedTxs.length > 500) processedTxs.shift(); // Очистка старых хэшей
+        }
+    } catch (e) { 
+        console.error("Ошибка сканера TON:", e.message); 
+    }
+}
+
+// Запуск фоновой проверки каждые 60 секунд (чтобы не спамить API слишком часто)
+setInterval(checkTonPayments, 60000);
+
+// ==========================================================================
+// [4] РАБОТА С ФАЙЛОВОЙ БАЗОЙ ДАННЫХ (JSON)
+// ==========================================================================
 function loadData() {
     if (fs.existsSync(DATA_FILE)) {
         try { 
             const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); 
             users = data.users || {};
+            processedTxs = data.processedTxs || [];
             jackpot = data.jackpot || { pool: MIN_JACKPOT, lastWinner: "Никто" };
             globalState = data.globalState || { weeklyCarpCaught: 0, lastReset: Date.now() };
             withdrawRequests = data.withdrawRequests || [];
-        } catch(e) { console.error("Ошибка загрузки:", e); }
+        } catch(e) { console.error("Ошибка загрузки базы:", e); }
     }
 }
 
 function saveData() { 
-    const dataToSave = { users, jackpot, globalState, withdrawRequests, lastSave: Date.now() };
+    const dataToSave = { 
+        users, 
+        processedTxs, 
+        jackpot, 
+        globalState, 
+        withdrawRequests, 
+        lastSave: Date.now() 
+    };
     fs.writeFileSync(DATA_FILE, JSON.stringify(dataToSave, null, 2)); 
 }
 loadData();
 
+// ==========================================================================
+// [5] ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (LOGS, LVL, ITEMS)
+// ==========================================================================
 function addLog(m) {
     const time = new Date().toLocaleTimeString();
     logs.unshift(`[${time}] ${m}`);
@@ -65,9 +151,8 @@ function addLog(m) {
     if(serverEvents.length > 15) serverEvents.pop();
 }
 
-// [СИСТЕМА УРОВНЕЙ - ЛОГИКА]
 function checkLevelUp(u) {
-    const nextLevelXP = u.level * 500; // 1 лвл = 500 XP, 2 лвл = 1000 XP...
+    const nextLevelXP = u.level * 500; 
     if (u.xp >= nextLevelXP) {
         u.xp -= nextLevelXP;
         u.level += 1;
@@ -118,7 +203,9 @@ function applyItem(u, item) {
     if (item === 'vip_30') u.buffs.vip = now + (30 * 24 * 60 * 60 * 1000);
 }
 
-// --- API ---
+// ==========================================================================
+// [6] ГЛАВНЫЙ API ОБРАБОТЧИК (ACTION ENGINE)
+// ==========================================================================
 app.post('/api/action', async (req, res) => {
     const { userId, userName, action, payload } = req.body;
     const now = Date.now();
@@ -141,7 +228,7 @@ app.post('/api/action', async (req, res) => {
     const u = users[userId];
     if (u.isBanned && userId !== ADMIN_ID) return res.status(403).json({ error: "BANNED" });
 
-    // Проверка наличия XP полей (для старых записей)
+    // Совместимость версий
     if (u.level === undefined) u.level = 1;
     if (u.xp === undefined) u.xp = 0;
 
@@ -170,7 +257,6 @@ app.post('/api/action', async (req, res) => {
             if (!hasTitan && u.dur <= 0) { msg = "Почини удочку!"; break; }
             if (lake === 'hope' && u.buffs.hope < now) { msg = "Доступ к Озеру закрыт!"; break; }
             
-            // Лимит забросов для VIP (защита от автокликеров)
             if (isVip && u.total > 0 && u.total % 100 === 0) {
                 if (now - u.stats.lastRest < 1800000) { msg = "Отдых 30 мин (VIP)!"; break; }
                 u.stats.lastRest = now;
@@ -181,7 +267,7 @@ app.post('/api/action', async (req, res) => {
             u.total++;
             u.stats.castsAsRef++;
 
-            // [HARD XP] Начисление опыта за заброс
+            // [XP BALANCE] +1 за заброс, VIP +2
             u.xp += (isVip ? 2 : 1);
             checkLevelUp(u);
 
@@ -197,7 +283,6 @@ app.post('/api/action', async (req, res) => {
             if (u.buffs.bait > now) weight *= isGoldHour ? 6 : 3;
 
             let rand = Math.random() * 100;
-            // Проверка срыва
             if (!hasTitan && rand < 5 && u.buffs.myakish <= 0) {
                 msg = "Срыв! 🐟"; 
             } else {
@@ -208,7 +293,7 @@ app.post('/api/action', async (req, res) => {
                 if (lake === 'hope') {
                     if (globalState.weeklyCarpCaught < 10 && Math.random() < 0.02) {
                         u.fish += (5000 / SELL_PRICE);
-                        u.xp += (isVip ? 100 : 50); // XP за Золотого карпа
+                        u.xp += (isVip ? 100 : 50); 
                         catchData = { type: "ЗОЛОТОЙ КАРП! 🏆", w: "5000 TC" };
                         globalState.weeklyCarpCaught++;
                         addLog(`${u.n} выловил КАРПА!`);
@@ -216,7 +301,7 @@ app.post('/api/action', async (req, res) => {
                     } else if (Math.random() < 0.15) {
                         const bonus = 100 + Math.floor(Math.random()*200);
                         u.b += bonus;
-                        u.xp += (isVip ? 10 : 5); // XP за Кошелек
+                        u.xp += (isVip ? 10 : 5); 
                         catchData = { type: "Кошелек! 💰", w: `${bonus} TC` };
                         checkLevelUp(u);
                     }
@@ -231,7 +316,6 @@ app.post('/api/action', async (req, res) => {
             jackpot.pool += tax;
             u.b += (income - tax);
             
-            // [HARD XP] XP за продажу
             u.xp += (isVip ? 10 : 5);
             u.fish = 0;
             msg = `Продано! +${income - tax} TC`;
@@ -265,7 +349,7 @@ app.post('/api/action', async (req, res) => {
                 if (userId === ADMIN_ID) { applyItem(u, item); msg = `АДМИН: Выдано!`; }
                 else {
                     msg = `Счет на ${tPrice} TON отправлен в ЛС!`;
-                    sendTgMessage(userId, `🛍 Заказ: ${item}\n💰 Сумма: ${tPrice} TON\n🏦 MEMO: FISH_${userId}_${item}`);
+                    sendTgMessage(userId, `🛍 Заказ: ${item}\n💰 Сумма: ${tPrice} TON\n🏦 Кошелек: ${MY_TON_WALLET}\n🏦 MEMO: FISH_${userId}_${item}`);
                 }
             }
             break;
@@ -320,4 +404,4 @@ app.post('/api/action', async (req, res) => {
     res.json({ ...u, maxEnergy, withdrawLimit: currentWithdrawLimit, msg, catchData, boxReward, jackpot, globalState, events: serverEvents });
 });
 
-app.listen(PORT, () => console.log(`TAMAC FISH 5.8.1 - MONOLITH ONLINE`));
+app.listen(PORT, () => console.log(`TAMAC FISH 5.9.1 - FULL MONOLITH`));
