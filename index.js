@@ -1,7 +1,7 @@
 /**
  * ==========================================================================
  * [PROJECT]: TAM ACOIN FISHING - THE TRUE MONOLITH
- * [VERSION]: 6.5.4 "RESTORED NITRO ENGINE"
+ * [VERSION]: 6.5.2 "NITRO FUEL EDITION"
  * [AUTHOR]: GEMINI & THE MASTER
  * ==========================================================================
  * МАТЕМАТИКА ЭКОНОМИКИ:
@@ -9,8 +9,6 @@
  * 2. СТОИМОСТЬ СПИНА: 2 NF (ЭКВИВАЛЕНТ 0.2 TON).
  * 3. ДОХОДНОСТЬ (RTP): 50% В ПОЛЬЗУ ИГРОКА / 50% В КАССУ МАСТЕРА.
  * 4. БЕЗОПАСНОСТЬ: ПРОВЕРКА HASH ТРАНЗАКЦИЙ ДЛЯ ЗАЩИТЫ ОТ ПОВТОРОВ.
- * ==========================================================================
- * НИКОГДА НЕ СОКРАЩАЙ И НЕ СУЖАЙ КОД. ПУСТЬ БУДЕТ 1000 СТРОК ИЛИ 10000.
  * ==========================================================================
  */
 
@@ -55,7 +53,7 @@ const PRICES_TON = {
 // --------------------------------------------------------------------------
 let users = {};
 let processedTxs = []; 
-let logs = ["Сервер 6.5.4: NITRO МОНОЛИТ ВОССТАНОВЛЕН 🚀"];
+let logs = ["Сервер 6.5.2: NITRO МОНОЛИТ ЗАПУЩЕН 🚀"];
 let serverEvents = [
     "Система: Автопилот TON активен", 
     "Экономика: Маржа 50% установлена", 
@@ -207,9 +205,6 @@ function loadData() {
         } catch(e) { 
             console.error("Критическая ошибка загрузки JSON:", e); 
         }
-    } else {
-        // Создание пустой базы при первом запуске
-        saveData();
     }
 }
 
@@ -327,7 +322,7 @@ app.post('/api/action', async (req, res) => {
             buffs: { titan: 0, hope: 0, vip: 0, bait: 0, myakish: 0 },
             stats: { boxes: 0, castsAsRef: 0 },
             isBanned: false,
-            isAdmin: (userId.toString() === ADMIN_ID.toString())
+            isAdmin: (userId === ADMIN_ID)
         };
         addLog(`Новый игрок: ${users[userId].n}`);
     }
@@ -418,23 +413,22 @@ app.post('/api/action', async (req, res) => {
             msg = `Улов продан за ${income - tax} TC!`;
             break;
 
-        case 'spin_nitro':
-            // КРУТКА НИТРО-КОЛЕСА ЗА 2 NF
-            if (u.nf < 2) { 
-                msg = "ОШИБКА: НУЖНО ТОПЛИВО (2 NF)!"; 
-                break; 
+        case 'spin_wheel':
+            // КРУТКА НИТРО-КОЛЕСА ЗА 2 NF (или за TC по твоему выбору)
+            const cur = payload.cur; // 'tc' или 'unit'
+            
+            if (cur === 'unit') {
+                if (u.nf < 2) { msg = "НУЖНО ТОПЛИВО (2 NF)!"; break; }
+                u.nf -= 2;
+            } else {
+                if (u.b < 100) { msg = "НЕДОСТАТОЧНО TC!"; break; }
+                u.b -= 100;
             }
-            u.nf -= 2;
-            const prize = spinNitroWheel(u);
-            msg = `🎡 NITRO-РЕЗУЛЬТАТ: ${prize}`;
+
+            const prizeResult = spinNitroWheel(u);
+            msg = `🎡 NITRO-РЕЗУЛЬТАТ: ${prizeResult}`;
             saveData();
             break;
-
-        case 'get_top':
-            const sortedPlayers = Object.values(users)
-                .sort((a, b) => b.b - a.b)
-                .slice(0, 10);
-            return res.json({ topPlayers: sortedPlayers.map(p => ({ n: p.n, b: p.b })) });
 
         case 'get_daily':
             if (now - u.lastBonus < 86400000) { 
@@ -443,20 +437,6 @@ app.post('/api/action', async (req, res) => {
                 u.b += 100; 
                 u.lastBonus = now; 
                 msg = "ПОЛУЧЕНО 100 TC!"; 
-            }
-            break;
-
-        case 'open_box':
-            if (u.stats.boxes > 0) {
-                u.stats.boxes--;
-                const boxRnd = Math.random();
-                let boxPrize = "";
-                if (boxRnd < 0.7) { u.b += 1000; boxPrize = "1000 TC"; }
-                else if (boxRnd < 0.95) { u.nf += 5; boxPrize = "5 NF"; }
-                else { u.buffs.vip = now + (24*3600000); boxPrize = "VIP 24H"; }
-                msg = `КЕЙС ОТКРЫТ: ${boxPrize}`;
-            } else {
-                msg = "НЕТ ДОСТУПНЫХ КЕЙСОВ";
             }
             break;
 
@@ -482,9 +462,9 @@ app.post('/api/action', async (req, res) => {
         // [ADMIN ZONE]
         // ------------------------------------------------------------------
         case 'admin_get_all':
-            if (u.isAdmin) {
+            if (userId === ADMIN_ID) {
                 return res.json({ 
-                    allUsers: users, 
+                    allUsers: Object.values(users), 
                     jackpot, 
                     events: serverEvents,
                     logs: logs.slice(0, 50)
@@ -493,22 +473,22 @@ app.post('/api/action', async (req, res) => {
             break;
 
         case 'admin_user_op':
-            if (u.isAdmin) {
-                const target = users[payload.targetId];
-                if (target) {
-                    if (payload.op === 'add_money') target.b += parseInt(payload.val);
-                    if (payload.op === 'add_nf') target.nf = (target.nf || 0) + parseInt(payload.val);
-                    if (payload.op === 'ban') target.isBanned = !target.isBanned;
-                    msg = "АДМИН: ДЕЙСТВИЕ ВЫПОЛНЕНО!";
-                }
+            if (userId !== ADMIN_ID) return res.status(403).end();
+            const target = users[payload.targetId];
+            if (target) {
+                if (payload.op === 'add_money') target.b += parseInt(payload.val);
+                if (payload.op === 'add_nf') target.nf = (target.nf || 0) + parseInt(payload.val);
+                if (payload.op === 'ban') target.isBanned = !target.isBanned;
+                msg = "АДМИН: ДЕЙСТВИЕ ВЫПОЛНЕНО!";
             }
             break;
     }
     
     saveData();
-    // Ответ клиенту
+    // Ответ клиенту: мапим nf в units для фронтенда
     res.json({ 
         ...u, 
+        units: u.nf, // Фронтенд ожидает units
         jackpot, 
         events: serverEvents, 
         msg, 
@@ -521,7 +501,7 @@ app.post('/api/action', async (req, res) => {
  */
 app.listen(PORT, () => {
     console.log(`========================================`);
-    console.log(`TAMAC NITRO MONOLITH 6.5.4 - ОНЛАЙН`);
+    console.log(`TAMAC NITRO MONOLITH 6.5.2 - ОНЛАЙН`);
     console.log(`ПОРТ: ${PORT}`);
     console.log(`КОШЕЛЕК: ${MY_TON_WALLET}`);
     console.log(`========================================`);
