@@ -36,7 +36,6 @@ const TONCENTER_API_KEY = '360540e7a910fec0124ef783d85d607d0963e0c26d204b49d3500
 
 /**
  * ПРАЙС-ЛИСТ (ЦЕНЫ В TON)
- * Используется для автоматической верификации платежей ботом.
  */
 const PRICES_TON = {
     'vip_bait': 1.0,        // VIP Приманка (7 дней)
@@ -72,71 +71,52 @@ const TAX_RATE = 0.05;
 // --------------------------------------------------------------------------
 // [3] ЯДРО УДАЧИ: NITRO WHEEL (МАТЕМАТИЧЕСКИЙ ПРОСЧЕТ)
 // --------------------------------------------------------------------------
-/**
- * Функция спина. 
- * Гарантирует, что в долгосроке профит остается у владельца.
- * ПРИЗЫ ПРИВЯЗАНЫ К ИНДЕКСАМ (0-7) ДЛЯ СИНХРОНИЗАЦИИ С КЛИЕНТОМ.
- */
 function spinNitroWheel(u) {
     const rnd = Math.random() * 100;
-    let res = { index: 3, prize: "ПУСТО! 💨" }; // По умолчанию сектор "ПУСТО"
+    let res = { index: 3, prize: "ПУСТО! 💨" }; 
 
-    // [МАТЕМАТИЧЕСКАЯ МОДЕЛЬ ВЫПАДЕНИЯ]
     if (rnd < 40) { 
-        // 40% - ПУСТО (Чистый доход системы)
         res = { index: 3, prize: "ПУСТО! 💨" }; 
     } 
     else if (rnd < 65) { 
-        // 25% - Игровая валюта (Малая)
         const win = 100;
         u.b += win;
         res = { index: 4, prize: "💰 +100 TC" }; 
     }
     else if (rnd < 80) { 
-        // 15% - Игровая валюта (Средняя)
         const win = 200;
         u.b += win;
         res = { index: 6, prize: "💰 +200 TC" }; 
     }
     else if (rnd < 88) { 
-        // 8% - Восстановление энергии
         u.energy = 100; 
         res = { index: 1, prize: "⚡ ЭНЕРГИЯ 100%" }; 
     }
     else if (rnd < 93) { 
-        // 5% - VIP Статус (Краткосрочный)
         const day = 24 * 60 * 60 * 1000;
         u.buffs.vip = Math.max(Date.now(), u.buffs.vip || 0) + day;
         res = { index: 5, prize: "⭐ VIP НА 24 ЧАСА!" }; 
     }
     else if (rnd < 97) { 
-        // 4% - Крупный куш TC
         const win = 500;
         u.b += win;
         res = { index: 2, prize: "💎 +500 TC" }; 
     }
     else if (rnd < 99) { 
-        // 2% - Минимальный выигрыш
         u.b += 50;
         res = { index: 0, prize: "💰 +50 TC" }; 
     }
     else { 
-        // 1% - ГЛАВНЫЙ ПРИЗ (JACKPOT В ЮНИТАХ)
-        // Возвращаем игроку 20 Units = 2 TON. Это мощный стимул.
         u.nf = (u.nf || 0) + 20; 
         res = { index: 7, prize: "🔥 JACKPOT: +20 UNITS! 🔥" }; 
         jackpot.lastWinner = u.n;
     }
-    
     return res;
 }
 
 // --------------------------------------------------------------------------
 // [4] АВТОМАТИЧЕСКИЙ МОНИТОРИНГ БЛОКЧЕЙНА TON
 // --------------------------------------------------------------------------
-/**
- * Сканер транзакций кошелька мастера.
- */
 async function checkTonPayments() {
     console.log("--- Сканирование TON: Поиск новых транзакций ---");
     try {
@@ -153,7 +133,6 @@ async function checkTonPayments() {
         for (const tx of transactions) {
             const hash = tx.transaction_id.hash;
             
-            // Проверка на дубликаты
             if (processedTxs.includes(hash)) continue;
 
             const inMsg = tx.in_msg;
@@ -167,11 +146,10 @@ async function checkTonPayments() {
 
             console.log(`Найдена транзакция: ${amount} TON, Memo: ${memo}`);
 
-            // [ОБРАБОТКА ПОПОЛНЕНИЯ БАЛАНСА NF]
             if (memo.includes('_DEPOSIT') || memo.includes('_RECHARGE')) {
                 const uId = memo.split('_')[1];
                 if (users[uId]) {
-                    const nfAdded = Math.floor(amount * 10); // Курс 1 к 10
+                    const nfAdded = Math.floor(amount * 10); 
                     users[uId].nf = (users[uId].nf || 0) + nfAdded;
                     processedTxs.push(hash);
                     saveData();
@@ -181,8 +159,6 @@ async function checkTonPayments() {
                     await sendTgMessage(ADMIN_ID, `💰 КАССА: +${amount} TON от ${users[uId].n}`);
                 }
             }
-            
-            // [ОБРАБОТКА ПОКУПКИ ТОВАРОВ]
             else if (memo.startsWith('FISH_')) {
                 const parts = memo.split('_');
                 const uId = parts[1];
@@ -199,7 +175,6 @@ async function checkTonPayments() {
                 }
             }
             
-            // Сохраняем хэш, чтобы не обрабатывать дважды
             processedTxs.push(hash);
             if (processedTxs.length > 2000) processedTxs.shift();
         }
@@ -208,7 +183,6 @@ async function checkTonPayments() {
     }
 }
 
-// Запуск сканера раз в минуту
 setInterval(checkTonPayments, 60000);
 
 // --------------------------------------------------------------------------
@@ -266,9 +240,6 @@ function addLog(m) {
 // --------------------------------------------------------------------------
 // [6] ИГРОВЫЕ МЕХАНИКИ (LOGIC CORE)
 // --------------------------------------------------------------------------
-/**
- * Расчет опыта и уровня.
- */
 function checkLevelUp(u) {
     const nextLevelXP = u.level * 500; 
     if (u.xp >= nextLevelXP) {
@@ -281,9 +252,6 @@ function checkLevelUp(u) {
     return false;
 }
 
-/**
- * Бот-уведомления.
- */
 async function sendTgMessage(chatId, text) {
     try {
         await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
@@ -296,9 +264,6 @@ async function sendTgMessage(chatId, text) {
     }
 }
 
-/**
- * Активация покупок.
- */
 function applyItem(u, item) {
     const now = Date.now();
     const week = 7 * 24 * 60 * 60 * 1000;
@@ -326,7 +291,6 @@ app.post('/api/action', async (req, res) => {
 
     if (!userId) return res.status(400).json({ error: "Missing UserID" });
 
-    // --- РЕГИСТРАЦИЯ / ИНИЦИАЛИЗАЦИЯ ---
     if (!users[userId]) {
         users[userId] = {
             id: userId,
@@ -353,16 +317,9 @@ app.post('/api/action', async (req, res) => {
     const u = users[userId];
     if (u.isBanned) return res.status(403).json({ error: "USER_BANNED" });
 
-    // Фиксы полей для старых аккаунтов
-    if (u.nf === undefined) u.nf = 0;
-    if (u.level === undefined) u.level = 1;
-    if (u.xp === undefined) u.xp = 0;
-    if (u.buffs.myakish === undefined) u.buffs.myakish = 0;
-
     const isVip = u.buffs.vip > now;
     const hasTitan = u.buffs.titan > now || isVip;
 
-    // --- РЕГЕНЕРАЦИЯ ЭНЕРГИИ ---
     if (isVip) {
         u.energy = 100;
     } else {
@@ -377,35 +334,28 @@ app.post('/api/action', async (req, res) => {
     let msg = ""; 
     let catchData = null;
 
-    // --- ОСНОВНОЙ ПЕРЕКЛЮЧАТЕЛЬ ДЕЙСТВИЙ ---
     switch (action) {
-        
         case 'load': 
             msg = "Данные игрока загружены"; 
             break;
 
         case 'cast':
-            // Проверки перед забросом
             if (!isVip && u.energy < 2) { msg = "НЕДОСТАТОЧНО ЭНЕРГИИ!"; break; }
             if (!hasTitan && u.dur <= 0) { msg = "УДОЧКА ТРЕБУЕТ РЕМОНТА!"; break; }
             
-            // Расход
             if (!isVip) u.energy -= 2;
             if (!hasTitan) u.dur = Math.max(0, u.dur - 1);
             u.total++;
 
-            // Опыт (X2 для VIP)
             let xpGain = isVip ? 4 : 2;
             if (u.isTurbo) xpGain *= 2;
             u.xp += xpGain;
             checkLevelUp(u);
 
-            // Рыбалка
             let weight = (Math.random() * 2.0 + 0.3);
             const isGoldHour = new Date().getMinutes() < 10;
             if (u.buffs.bait > now) weight *= (isGoldHour ? 6 : 3);
 
-            // ТУРБО-МОД
             if (u.isTurbo) {
                 const turboCash = Math.floor(weight * SELL_PRICE);
                 u.b += turboCash;
@@ -415,7 +365,7 @@ app.post('/api/action', async (req, res) => {
                 };
             } else {
                 u.fish += weight;
-                catchData = { type: "Рыба", w: weight.toFixed(2) + " кг" };
+                catchData = { type: "Рыба", w: weight.toFixed(2) };
             }
             break;
 
@@ -434,9 +384,7 @@ app.post('/api/action', async (req, res) => {
             break;
 
         case 'spin_wheel':
-            // ГЛАВНЫЙ ЭКШЕН КОЛЕСА
             const currency = payload.cur || 'tc';
-            
             if (currency === 'unit') {
                 if (u.nf < 2) { msg = "ОШИБКА: НУЖНО 2 ЮНИТА!"; break; }
                 u.nf -= 2;
@@ -447,9 +395,7 @@ app.post('/api/action', async (req, res) => {
 
             const wheelResult = spinNitroWheel(u);
             u.stats.totalSpins = (u.stats.totalSpins || 0) + 1;
-            
             saveData();
-            // СЕКРЕТНЫЙ ОТВЕТ: Возвращаем wheelIndex для синхронизации анимации
             return res.json({ 
                 ...u, 
                 units: u.nf, 
@@ -458,19 +404,8 @@ app.post('/api/action', async (req, res) => {
                 wheelIndex: wheelResult.index 
             });
 
-        case 'get_daily':
-            if (now - u.lastBonus < 86400000) { 
-                msg = "БОНУС ЕЩЕ НЕ ГОТОВ!"; 
-            } else {
-                u.b += 150; 
-                u.lastBonus = now; 
-                msg = "ПОЛУЧЕНО 150 TC!"; 
-            }
-            break;
-
         case 'buy':
             const targetItem = payload.id;
-            // Ремонт
             if (targetItem === 'repair' && u.b >= 50) { 
                 u.b -= 50; 
                 u.dur = 100; 
@@ -478,59 +413,20 @@ app.post('/api/action', async (req, res) => {
                 break; 
             }
             
-            // Запрос счета TON
             const priceTon = PRICES_TON[targetItem];
             if (priceTon) {
                 msg = `ИНСТРУКЦИЯ ОТПРАВЛЕНА В БОТА!`;
                 sendTgMessage(userId, `<b>💳 ОПЛАТА ТОВАРА</b>\n\nТовар: <code>${targetItem}</code>\nЦена: <b>${priceTon} TON</b>\n\nОтправьте TON на адрес:\n<code>${MY_TON_WALLET}</code>\n\n⚠️ <b>ОБЯЗАТЕЛЬНО</b> укажите этот комментарий (MEMO):\n<code>FISH_${userId}_${targetItem}</code>`);
             }
             break;
-            
-        // --- ADMIN PANEL ACTIONS ---
-        case 'admin_get_all':
-            if (u.isAdmin) {
-                return res.json({ 
-                    allUsers: Object.values(users), 
-                    jackpot, 
-                    events: serverEvents,
-                    logs: logs.slice(0, 50)
-                });
-            }
-            break;
-
-        case 'admin_user_op':
-            if (!u.isAdmin) return res.status(403).end();
-            const targetUser = users[payload.targetId];
-            if (targetUser) {
-                if (payload.op === 'add_money') targetUser.b += parseInt(payload.val);
-                if (payload.op === 'add_nf') targetUser.nf = (targetUser.nf || 0) + parseInt(payload.val);
-                if (payload.op === 'ban') targetUser.isBanned = !targetUser.isBanned;
-                msg = "АДМИН: ИЗМЕНЕНИЯ СОХРАНЕНЫ";
-                saveData();
-            }
-            break;
     }
     
     saveData();
-    // Стандартный ответ
-    res.json({ 
-        ...u, 
-        units: u.nf, 
-        jackpot, 
-        events: serverEvents, 
-        msg, 
-        catchData 
-    });
+    res.json({ ...u, units: u.nf, jackpot, events: serverEvents, msg, catchData });
 });
 
-/**
- * СТАРТ МОНОЛИТА
- */
 app.listen(PORT, () => {
     console.log(`====================================================`);
     console.log(`🚀 TAMAC NITRO MONOLITH 6.5.2 ЗАПУЩЕН`);
-    console.log(`📍 ПОРТ: ${PORT}`);
-    console.log(`💼 КОШЕЛЕК МАСТЕРА: ${MY_TON_WALLET}`);
-    console.log(`📊 RTP: 50% | 1 TON = 10 NF`);
     console.log(`====================================================`);
 });
