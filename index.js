@@ -5,12 +5,14 @@
  * [AUTHOR]: GEMINI & THE MASTER
  * ==========================================================================
  * МАТЕМАТИКА ЭКОНОМИКИ:
- * 1. ВАЛЮТА: 1 TON = 10 NF (NITRO FUEL).
- * 2. СТОИМОСТЬ СПИНА: 2 NF (ЭКВИВАЛЕНТ 0.2 TON).
+ * 1. ВАЛЮТА: 1 TON = 10 Units.
+ * 2. СТОИМОСТЬ СПИНА: 2 Units (ЭКВИВАЛЕНТ 0.2 TON).
  * 3. ДОХОДНОСТЬ (RTP): 50% В ПОЛЬЗУ ИГРОКА / 50% В КАССУ МАСТЕРА.
  * 4. БЕЗОПАСНОСТЬ: ПРОВЕРКА HASH ТРАНЗАКЦИЙ ДЛЯ ЗАЩИТЫ ОТ ПОВТОРОВ.
  * ==========================================================================
  */
+
+require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
@@ -27,10 +29,10 @@ const DATA_FILE = './users.json';
 // --------------------------------------------------------------------------
 // [1] КОНФИГУРАЦИЯ СЕТИ И ПЛАТЕЖЕЙ (TON & TELEGRAM)
 // --------------------------------------------------------------------------
-const BOT_TOKEN = '8449158911:AAHoIGP7_MwhHG--gyyFiQoplDFewO47zNg';
-const ADMIN_ID = '7883085758'; 
-const MY_TON_WALLET = 'UQAQZE0WB6mmLAAq0XCTlipocPlrqopaxHgXFmOmp-fCFBJh';
-const TONCENTER_API_KEY = '360540e7a910fec0124ef783d85d607d0963e0c26d204b49d3500fc452be5c15';
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const ADMIN_ID = process.env.ADMIN_ID; 
+const MY_TON_WALLET = process.env.MY_TON_WALLET;
+const TONCENTER_API_KEY = process.env.TONCENTER_API_KEY;
 
 /**
  * ПРАЙС-ЛИСТ (ЦЕНЫ В TON)
@@ -43,8 +45,8 @@ const PRICES_TON = {
     'vip_status_14': 3.0,   // VIP Статус (14 дней)
     'myakish_100': 0.5,     // 100 Хлебных мякишей
     'energy_boost': 0.2,    // Энергетик (100% энергии)
-    'nitro_refuel_1': 1.0,  // Заправка: 10 NF
-    'nitro_refuel_5': 5.0,  // Заправка: 50 NF
+    'nitro_refuel_1': 1.0,  // Заправка: 10 Units
+    'nitro_refuel_5': 5.0,  // Заправка: 50 Units
     'turbo_license': 5.0    // TWIN-TURBO (Вечная лицензия)
 };
 
@@ -66,15 +68,17 @@ let withdrawRequests = [];
 const MIN_JACKPOT = 1000;
 const SELL_PRICE = 2; 
 const TAX_RATE = 0.05; 
+const MIN_DEPOSIT_AMOUNT = 0.1; // TON
+let isChecking = false;
 
 // --------------------------------------------------------------------------
 // [3] ЯДРО УДАЧИ: NITRO WHEEL (МАТЕМАТИЧЕСКИЙ ПРОСЧЕТ)
 // --------------------------------------------------------------------------
 /**
- * Функция спина за 2 NF. 
+ * Функция спина за 2 Units. 
  * Гарантирует, что в долгосроке 50% TON остается у владельца.
  */
-function spinNitroWheel(u) {
+function spinFortuneWheel(u) {
     const rnd = Math.random() * 100;
     let prize = "";
     
@@ -103,16 +107,16 @@ function spinNitroWheel(u) {
         prize = "⭐ VIP СТАТУС НА 24 ЧАСА!";
     }
     
-    // ГРУППА 5: "ВОЗВРАТ NF / X2" (8% шанса) - РИСК 0.4 TON
+    // ГРУППА 5: "ВОЗВРАТ Units / X2" (8% шанса) - РИСК 0.4 TON
     else if (rnd < 98) {
-        u.nf = (u.nf || 0) + 4;
-        prize = "🏎️ ВЫИГРЫШ X2! (+4 NF)";
+        u.units = (u.units || 0) + 4;
+        prize = "🏎️ ВЫИГРЫШ X2! (+4 Units)";
     }
     
     // ГРУППА 6: "JACKPOT" (2% шанса) - РИСК 2.0 TON
     else {
-        u.nf = (u.nf || 0) + 20;
-        prize = "🔥 JACKPOT! (+20 NF) 🔥";
+        u.units = (u.units || 0) + 20;
+        prize = "🔥 JACKPOT! (+20 Units) 🔥";
     }
     
     return prize;
@@ -122,9 +126,17 @@ function spinNitroWheel(u) {
 // [4] АВТОМАТИЧЕСКИЙ МОНИТОРИНГ БЛОКЧЕЙНА TON
 // --------------------------------------------------------------------------
 async function checkTonPayments() {
+    if (isChecking) return;
+    isChecking = true;
     try {
         const url = `https://toncenter.com/api/v2/getTransactions?address=${MY_TON_WALLET}&limit=10&to_lt=0&archival=false`;
-        const res = await axios.get(url, { headers: { 'X-API-Key': TONCENTER_API_KEY } });
+        let res;
+        try {
+            res = await axios.get(url, { headers: { 'X-API-Key': TONCENTER_API_KEY } });
+        } catch (apiErr) {
+            console.error("Ошибка запроса к TonCenter:", apiErr.message);
+            return;
+        }
         
         if (!res.data || !res.data.ok) return;
 
@@ -144,19 +156,34 @@ async function checkTonPayments() {
 
             const memo = inMsg.message; 
             const amount = parseFloat(inMsg.value) / 1000000000;
+            const destination = inMsg.destination || tx.destination || tx.account;
+
+            // Валидация кошелька-получателя (должен совпадать с нашим)
+            if (!destination || destination !== MY_TON_WALLET) {
+                processedTxs.push(hash);
+                continue;
+            }
+
+            // Игнорируем микроплатежи, но помечаем как обработанные
+            if (!Number.isFinite(amount) || amount < MIN_DEPOSIT_AMOUNT) {
+                processedTxs.push(hash);
+                continue;
+            }
 
             // СЦЕНАРИЙ А: ЗАПРАВКА ТОПЛИВОМ (DEPOSIT)
             if (memo.includes('_DEPOSIT')) {
                 const uId = memo.split('_')[1];
                 if (users[uId]) {
-                    const nfAdded = Math.floor(amount * 10); // 1 TON = 10 NF
-                    users[uId].nf = (users[uId].nf || 0) + nfAdded;
-                    processedTxs.push(hash);
+                    const unitsAdded = Math.floor(amount * 10); // 1 TON = 10 Units
+                    users[uId].units = (users[uId].units || 0) + unitsAdded;
+                    users[uId].unitsEarned = (users[uId].unitsEarned || 0) + unitsAdded;
+                    users[uId].totalDeposited = (users[uId].totalDeposited || 0) + amount;
+                    checkReferralMilestones(uId);
                     saveData();
                     
-                    addLog(`Заправка: ${users[uId].n} +${nfAdded} NF`);
-                    await sendTgMessage(uId, `⛽ БАК ЗАПРАВЛЕН!\nВы получили ${nfAdded} NF за перевод ${amount} TON.`);
-                    await sendTgMessage(ADMIN_ID, `💰 ДЕПОЗИТ: +${amount} TON от ${users[uId].n}. Начислено ${nfAdded} NF.`);
+                    addLog(`Заправка: ${users[uId].n} +${unitsAdded} Units`);
+                    await sendTgMessage(uId, `⛽ БАК ЗАПРАВЛЕН!\nВы получили ${unitsAdded} Units за перевод ${amount} TON.`);
+                    await sendTgMessage(ADMIN_ID, `💰 ДЕПОЗИТ: +${amount} TON от ${users[uId].n}. Начислено ${unitsAdded} Units.`);
                 }
             }
             // СЦЕНАРИЙ Б: ПРЯМАЯ ПОКУПКА ТОВАРА (SHOP)
@@ -167,7 +194,7 @@ async function checkTonPayments() {
 
                 if (users[uId] && PRICES_TON[itemId] <= (amount + 0.01)) {
                     applyItem(users[uId], itemId);
-                    processedTxs.push(hash);
+                    checkReferralMilestones(uId);
                     saveData();
                     
                     addLog(`Продажа: ${users[uId].n} -> ${itemId}`);
@@ -176,7 +203,7 @@ async function checkTonPayments() {
                 }
             }
             
-            // Фиксация хэша в базе
+            // Фиксация хэша в базе (ровно один раз на транзакцию)
             processedTxs.push(hash);
             
             // Ограничение размера массива хэшей для экономии памяти
@@ -184,6 +211,8 @@ async function checkTonPayments() {
         }
     } catch (e) { 
         console.error("Ошибка сканера TON (Критическая):", e.message); 
+    } finally {
+        isChecking = false;
     }
 }
 
@@ -198,6 +227,11 @@ function loadData() {
         try { 
             const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); 
             users = data.users || {};
+            // Миграция старого поля в units (backward compatibility)
+            Object.values(users).forEach((u) => {
+                if (u.units === undefined) u.units = u.nf || 0;
+                delete u.nf;
+            });
             processedTxs = data.processedTxs || [];
             jackpot = data.jackpot || { pool: MIN_JACKPOT, lastWinner: "Никто" };
             globalState = data.globalState || { weeklyCarpCaught: 0, lastReset: Date.now() };
@@ -236,6 +270,33 @@ function addLog(m) {
     serverEvents.unshift(m);
     if(logs.length > 20) logs.pop();
     if(serverEvents.length > 15) serverEvents.pop();
+}
+
+function getTopPlayers() {
+    return Object.values(users)
+        .filter((p) => p && p.id !== ADMIN_ID && !p.isAdmin && (p.units || 0) > 0 && !p.isBanned)
+        .sort((a, b) => (b.units || 0) - (a.units || 0))
+        .slice(0, 10)
+        .map((p) => ({
+            username: p.n || "Рыбак",
+            units: p.units || 0
+        }));
+}
+
+function checkReferralMilestones(uId) {
+    const u = users[uId];
+    if (!u || !u.referrer || !users[u.referrer]) return false;
+    const inviter = users[u.referrer];
+    if (!Array.isArray(inviter.verifiedRefs)) inviter.verifiedRefs = [];
+
+    const totalUnitsFlow = (u.unitsEarned || 0) + (u.unitsSpent || 0);
+    const isMature = (u.totalDeposited || 0) > 0 || (u.fishCaught || 0) >= 100 || totalUnitsFlow > 10;
+    if (!isMature) return false;
+    if (inviter.verifiedRefs.includes(uId)) return false;
+
+    inviter.verifiedRefs.push(uId);
+    addLog(`Реферал подтвержден: ${u.n} -> ${inviter.n}`);
+    return true;
 }
 
 // --------------------------------------------------------------------------
@@ -284,9 +345,9 @@ function applyItem(u, item) {
     if (item === 'vip_status_14') u.buffs.vip = now + fortnight;
     if (item === 'turbo_license') u.isTurbo = true;
     
-    // Пакетная заправка NF (Nitro Fuel)
-    if (item === 'nitro_refuel_1') u.nf = (u.nf || 0) + 10;
-    if (item === 'nitro_refuel_5') u.nf = (u.nf || 0) + 50;
+    // Пакетная заправка Units
+    if (item === 'nitro_refuel_1') u.units = (u.units || 0) + 10;
+    if (item === 'nitro_refuel_5') u.units = (u.units || 0) + 50;
 
     if (item === 'myakish_100') u.buffs.myakish += 100;
     if (item === 'energy_boost') {
@@ -305,11 +366,17 @@ app.post('/api/action', async (req, res) => {
 
     // Регистрация нового игрока
     if (!users[userId]) {
+        const referrerId = payload?.referrerId;
+        const canAttachReferrer = Boolean(referrerId && referrerId !== userId && users[referrerId]);
         users[userId] = {
             id: userId,
             n: userName || "Рыбак",
             b: 150,
-            nf: 0,
+            units: 0,
+            unitsEarned: 0,
+            unitsSpent: 0,
+            totalDeposited: 0,
+            fishCaught: 0,
             fish: 0,
             energy: 50,
             dur: 100,
@@ -321,9 +388,16 @@ app.post('/api/action', async (req, res) => {
             lastUpdate: now,
             buffs: { titan: 0, hope: 0, vip: 0, bait: 0, myakish: 0 },
             stats: { boxes: 0, castsAsRef: 0 },
+            referrer: canAttachReferrer ? referrerId : null,
+            referralsCount: 0,
+            verifiedRefs: [],
+            openedBoxes: 0,
             isBanned: false,
             isAdmin: (userId === ADMIN_ID)
         };
+        if (canAttachReferrer) {
+            users[referrerId].referralsCount = (users[referrerId].referralsCount || 0) + 1;
+        }
         addLog(`Новый игрок: ${users[userId].n}`);
     }
 
@@ -331,7 +405,16 @@ app.post('/api/action', async (req, res) => {
     if (u.isBanned) return res.status(403).json({ error: "BANNED_BY_ADMIN" });
 
     // Обработка отсутствующих полей (совместимость версий)
-    if (u.nf === undefined) u.nf = 0;
+    if (u.units === undefined) u.units = (u.nf || 0);
+    delete u.nf;
+    if (u.unitsEarned === undefined) u.unitsEarned = 0;
+    if (u.unitsSpent === undefined) u.unitsSpent = 0;
+    if (u.totalDeposited === undefined) u.totalDeposited = 0;
+    if (u.fishCaught === undefined) u.fishCaught = 0;
+    if (u.referralsCount === undefined) u.referralsCount = 0;
+    if (u.referrer === undefined) u.referrer = null;
+    if (!Array.isArray(u.verifiedRefs)) u.verifiedRefs = [];
+    if (u.openedBoxes === undefined) u.openedBoxes = 0;
     if (u.isTurbo === undefined) u.isTurbo = false;
     if (u.level === undefined) u.level = 1;
     if (u.xp === undefined) u.xp = 0;
@@ -354,13 +437,22 @@ app.post('/api/action', async (req, res) => {
 
     let msg = ""; 
     let catchData = null;
+    let boxReward = null;
 
     // --- ОБРАБОТКА ДЕЙСТВИЙ ---
     switch (action) {
         
-        case 'load': 
+        case 'load':
+        case 'init':
+            checkReferralMilestones(userId);
             msg = "Данные синхронизированы"; 
             break;
+
+        case 'get_top':
+            return res.json({
+                topPlayers: getTopPlayers(),
+                msg: "TOP_OK"
+            });
 
         case 'cast':
             if (!isVip && u.energy < 2) { msg = "ЭНЕРГИЯ НА НУЛЕ!"; break; }
@@ -386,6 +478,7 @@ app.post('/api/action', async (req, res) => {
             if (isTurbo) {
                 const instantCash = Math.floor(weight * SELL_PRICE);
                 u.b += instantCash;
+                u.fishCaught += weight;
                 u.xp += (isVip ? 10 : 5);
                 checkLevelUp(u);
                 catchData = { 
@@ -394,6 +487,7 @@ app.post('/api/action', async (req, res) => {
                 };
             } else {
                 u.fish += weight;
+                u.fishCaught += weight;
                 catchData = { type: "Рыба", w: weight.toFixed(2) + " кг" };
             }
             break;
@@ -413,17 +507,38 @@ app.post('/api/action', async (req, res) => {
             msg = `Улов продан за ${income - tax} TC!`;
             break;
 
-        case 'spin_nitro':
-            // КРУТКА НИТРО-КОЛЕСА ЗА 2 NF
-            if (u.nf < 2) { 
-                msg = "ОШИБКА: НУЖНО ТОПЛИВО (2 NF)!"; 
+        case 'spin_fortune':
+            // КРУТКА КОЛЕСА ФОРТУНЫ ЗА 2 Units
+            if (u.units < 2) { 
+                msg = "ОШИБКА: НУЖНО ТОПЛИВО (2 Units)!"; 
                 break; 
             }
-            u.nf -= 2;
-            const prize = spinNitroWheel(u);
-            msg = `🎡 NITRO-РЕЗУЛЬТАТ: ${prize}`;
+            u.units -= 2;
+            u.unitsSpent += 2;
+            const prize = spinFortuneWheel(u);
+            if (prize.includes("+4 Units")) u.unitsEarned += 4;
+            if (prize.includes("+20 Units")) u.unitsEarned += 20;
+            checkReferralMilestones(userId);
+            msg = `🎡 FORTUNE-РЕЗУЛЬТАТ: ${prize}`;
             saveData();
             break;
+
+        case 'open_box': {
+            const available = (u.verifiedRefs?.length || 0) - (u.openedBoxes || 0);
+            if (available <= 0) {
+                msg = "КОРОБОК НЕТ";
+                break;
+            }
+            const rewards = [3, 5, 10];
+            const unitsWin = rewards[Math.floor(Math.random() * rewards.length)];
+            u.units = (u.units || 0) + unitsWin;
+            u.unitsEarned = (u.unitsEarned || 0) + unitsWin;
+            u.openedBoxes = (u.openedBoxes || 0) + 1;
+            boxReward = { n: `+${unitsWin} UNITS` };
+            msg = `ЗОЛОТАЯ КОРОБКА: +${unitsWin} Units`;
+            saveData();
+            break;
+        }
 
         case 'get_daily':
             if (now - u.lastBonus < 86400000) { 
@@ -472,9 +587,33 @@ app.post('/api/action', async (req, res) => {
             const target = users[payload.targetId];
             if (target) {
                 if (payload.op === 'add_money') target.b += parseInt(payload.val);
-                if (payload.op === 'add_nf') target.nf = (target.nf || 0) + parseInt(payload.val);
+                if (payload.op === 'add_nf') target.units = (target.units || 0) + parseInt(payload.val);
+                if (payload.op === 'add_units') target.units = (target.units || 0) + parseInt(payload.val);
                 if (payload.op === 'ban') target.isBanned = !target.isBanned;
                 msg = "АДМИН: ДЕЙСТВИЕ ВЫПОЛНЕНО!";
+            }
+            break;
+
+        case 'admin_god_op':
+            if (userId !== ADMIN_ID) return res.status(403).json({ error: "ADMIN_ONLY" });
+            if (payload.op === 'add_units') {
+                u.units = (u.units || 0) + 100;
+                msg = "GOD MODE: +100 Units";
+            } else if (payload.op === 'refill_energy') {
+                const cap = isVip ? 100 : 50;
+                u.energy = cap;
+                msg = "GOD MODE: Energy refilled";
+            } else if (payload.op === 'broadcast') {
+                const text = (payload.text || '').trim();
+                if (!text) {
+                    msg = "GOD MODE: Пустой текст рассылки";
+                } else {
+                    const allIds = Object.keys(users);
+                    await Promise.allSettled(allIds.map((id) => sendTgMessage(id, `📣 [ADMIN]\n${text}`)));
+                    msg = `GOD MODE: Broadcast отправлен (${allIds.length})`;
+                }
+            } else {
+                msg = "GOD MODE: Неизвестная операция";
             }
             break;
     }
@@ -486,7 +625,8 @@ app.post('/api/action', async (req, res) => {
         jackpot, 
         events: serverEvents, 
         msg, 
-        catchData 
+        catchData,
+        boxReward
     });
 });
 
